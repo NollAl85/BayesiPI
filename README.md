@@ -138,6 +138,8 @@ python3 scripts/run_experiment.py benchmark/problems/real_lean_01.jsonl \
   --run-id real01_low_01
 ```
 
+Real-task pipeline test coverage includes ingestion public/private splitting, `file_with_hole` rendering, `project_root` subprocess execution, direct-probe selector hard rejection and loud failure modes, probe CSV output, `pi_initial_only` approach tracing, uniform round-robin allocation pressure, and public payload leakage boundaries.
+
 ## real_lean_02 Pipeline
 
 `real_lean_02` is the next benchmark pipeline after the HTPI/SorryDB pilot. Its purpose is not to prove as many theorems as possible; it is to find real Lean tasks where allocation matters.
