@@ -19,7 +19,7 @@ The harness compares three conditions:
 - `lean` is available on `PATH`.
 - `lake` is optional for toy problems, but recommended for Mathlib work.
 - No web search or external retrieval is used during experiment runs.
-- Mathlib reconstruction is supported by the schema and adapters, but V1 smoke tests use toy problems.
+- Mathlib reconstruction requires a local Lake/Mathlib checkout. The harness does not use web search during proof runs.
 
 ## Quick Start
 
@@ -137,6 +137,84 @@ python3 scripts/run_experiment.py benchmark/problems/real_lean_01.jsonl \
   --subagent-reasoning-effort low \
   --run-id real01_low_01
 ```
+
+## real_lean_02 Pipeline
+
+`real_lean_02` is the next benchmark pipeline after the HTPI/SorryDB pilot. Its purpose is not to prove as many theorems as possible; it is to find real Lean tasks where allocation matters.
+
+The target empirical regime is:
+
+- `direct_full`: 20-60% solved
+- `uniform_constrained`: 40-80% solved
+- `pi`: enough remaining headroom to differ from uniform
+
+The primary signal-bearing subset is the `uniform_constrained` failed set, not direct one-shot failures.
+
+Sample candidates from a local Mathlib checkout:
+
+```bash
+python3 scripts/sample_mathlib_real_lean_02.py /path/to/mathlib-or-lake-project \
+  --limit 100 \
+  --out-candidates benchmark/candidates/real_lean_02_candidates.jsonl \
+  --out-solutions benchmark/solutions/real_lean_02_solutions.jsonl
+```
+
+The sampler targets upper-undergraduate and early-graduate Mathlib areas such as linear algebra, topology, analysis, group/ring/field theory, order, and measurable spaces. Public problems use anonymized theorem names like `real02_target_001`, a broad public import, and no source module path. Original theorem names, source modules, and reference proofs are written only to the private solutions JSONL.
+
+Run the three difficulty probes:
+
+```bash
+python3 scripts/probe_real_lean_02.py benchmark/candidates/real_lean_02_candidates.jsonl \
+  --backend codex_subagents \
+  --subagent-reasoning-effort low \
+  --probe all
+```
+
+This uses:
+
+- `config/real_lean_02_direct_one_shot.yaml`
+- `config/real_lean_02_direct_full.yaml`
+- `config/real_lean_02_uniform_constrained.yaml`
+
+Select the final benchmark only after `direct_full` and `uniform_constrained` probes exist:
+
+```bash
+python3 scripts/select_real_lean_02.py \
+  --candidates benchmark/candidates/real_lean_02_candidates.jsonl \
+  --solutions benchmark/solutions/real_lean_02_solutions.jsonl \
+  --direct-full-summary logs/real_lean_02_direct_full/summary.csv \
+  --uniform-constrained-summary logs/real_lean_02_uniform_constrained/summary.csv \
+  --out-problems benchmark/problems/real_lean_02.jsonl
+```
+
+The selector hard-rejects candidates solved by `direct_full`, candidates solved by `uniform_constrained` in one round, short or trivial reference proofs, public payloads that leak private source information, and slow reference checks when timing metadata is available. If fewer than 20 candidates survive, it fails with:
+
+```text
+Candidate pool too easy: only X survived. Sample harder modules.
+```
+
+Run final allocation with:
+
+```bash
+python3 scripts/run_experiment.py benchmark/problems/real_lean_02.jsonl \
+  --config config/real_lean_02_allocation.yaml \
+  --backend codex_subagents \
+  --subagent-reasoning-effort low \
+  --run-id real02_low_01
+```
+
+Then analyze:
+
+```bash
+python3 scripts/analyze_real_lean_02.py \
+  --summary logs/real02_low_01/summary.csv \
+  --approach-trace logs/real02_low_01/approach_trace.csv \
+  --direct-full-summary logs/real_lean_02_direct_full/summary.csv \
+  --uniform-constrained-summary logs/real_lean_02_uniform_constrained/summary.csv \
+  --out-dir logs/real02_low_01/real_lean_02_analysis
+```
+
+The analysis reports all-task aggregates, direct-full-failed aggregates, uniform-constrained-failed aggregates, solving approaches, PI belief traces, and whether PI changed beliefs after failed workers.
 
 ## HTPI/SorryDB Pilot
 

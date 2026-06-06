@@ -1,0 +1,17 @@
+run_id_prefix: real02_direct_full
+lean_command:
+  - lake
+  - env
+  - lean
+max_rounds: 3
+workers_per_round: 1
+max_llm_calls: 3
+max_lean_calls: 3
+max_wall_seconds: 900
+lean_timeout_seconds: 90
+max_estimated_tokens: null
+uniform_policy: round_robin
+uniform_seed: 3
+conditions:
+  - direct
+approaches: []
