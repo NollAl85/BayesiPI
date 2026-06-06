@@ -22,13 +22,23 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--backend",
-        choices=["deterministic", "manual"],
+        choices=["deterministic", "manual", "codex_subagents"],
         default="deterministic",
         help="Agent backend. Smoke tests default to deterministic.",
     )
+    parser.add_argument(
+        "--subagent-reasoning-effort",
+        default=None,
+        help="Optional Codex reasoning effort for codex_subagents, for example low, medium, high, or xhigh.",
+    )
     args = parser.parse_args()
     config = load_config(PROJECT_ROOT / "config" / "default.yaml")
-    runner = ExperimentRunner(config, PROJECT_ROOT, backend_name=args.backend)
+    runner = ExperimentRunner(
+        config,
+        PROJECT_ROOT,
+        backend_name=args.backend,
+        subagent_reasoning_effort=args.subagent_reasoning_effort,
+    )
     rows = runner.run_all(toy_problems())
     summary_path = runner.logger.run_dir / "summary.csv"
     aggregate_path = write_aggregate_csv(summary_path)

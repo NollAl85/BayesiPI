@@ -26,11 +26,13 @@ class RunLogger:
         self.responses_dir = self.run_dir / "responses"
         self.lean_dir = self.run_dir / "lean"
         self.pending_dir = self.run_dir / "pending"
+        self.codex_subagents_dir = self.run_dir / "codex_subagents"
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.prompts_dir.mkdir(exist_ok=True)
         self.responses_dir.mkdir(exist_ok=True)
         self.lean_dir.mkdir(exist_ok=True)
         self.pending_dir.mkdir(exist_ok=True)
+        self.codex_subagents_dir.mkdir(exist_ok=True)
         self._event_index = 0
         self._artifact_index = 0
 

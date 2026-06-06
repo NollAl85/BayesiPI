@@ -24,9 +24,14 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config" / "default.yaml")
     parser.add_argument(
         "--backend",
-        choices=["deterministic", "manual"],
+        choices=["deterministic", "manual", "codex_subagents"],
         default="manual",
-        help="Agent backend. Use manual for Codex/subagent file exchange.",
+        help="Agent backend. Use manual for file exchange or codex_subagents for Codex CLI tasks.",
+    )
+    parser.add_argument(
+        "--subagent-reasoning-effort",
+        default=None,
+        help="Optional Codex reasoning effort for codex_subagents, for example low, medium, high, or xhigh.",
     )
     parser.add_argument("--run-id", default=None, help="Optional explicit run ID for reproducible log paths.")
     parser.add_argument(
@@ -40,7 +45,13 @@ def main() -> None:
     config = load_config(args.config)
     conditions = [Condition(value) for value in args.condition] if args.condition else None
     problems = load_jsonl(args.benchmark_jsonl)
-    runner = ExperimentRunner(config, PROJECT_ROOT, run_id=args.run_id, backend_name=args.backend)
+    runner = ExperimentRunner(
+        config,
+        PROJECT_ROOT,
+        run_id=args.run_id,
+        backend_name=args.backend,
+        subagent_reasoning_effort=args.subagent_reasoning_effort,
+    )
     rows = runner.run_all(problems, conditions)
     summary_path = runner.logger.run_dir / "summary.csv"
     aggregate_path = write_aggregate_csv(summary_path)

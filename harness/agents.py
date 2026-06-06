@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import json
+import os
+import shlex
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Protocol
@@ -28,8 +34,20 @@ TOY_PROOF_ATTEMPTS = {
 
 
 class AgentBackend(Protocol):
+    backend_name: str
+
     def complete(self, role: str, prompt: str, context: dict[str, Any]) -> str:
         """Return a structured response as text."""
+
+    def complete_many(self, calls: list[AgentCall]) -> list[str]:
+        """Return responses for several calls, preserving input order."""
+
+
+@dataclass(frozen=True)
+class AgentCall:
+    role: str
+    prompt: str
+    context: dict[str, Any]
 
 
 class DeterministicToyBackend:
@@ -38,6 +56,8 @@ class DeterministicToyBackend:
     It uses problem IDs rather than hidden reference proofs, so the harness can
     test the full Lean/logging/budget path without leaking benchmark answers.
     """
+
+    backend_name = "deterministic"
 
     def complete(self, role: str, prompt: str, context: dict[str, Any]) -> str:
         problem_id = context.get("problem", {}).get("problem_id", "")
@@ -88,6 +108,9 @@ class DeterministicToyBackend:
             return _pi_response(selected, "No proof found; continue with the best remaining approaches.")
         raise ValueError(f"Unknown role: {role}")
 
+    def complete_many(self, calls: list[AgentCall]) -> list[str]:
+        return [self.complete(call.role, call.prompt, call.context) for call in calls]
+
 
 class FileExchangeBackend:
     """Manual backend for Codex/subagent file exchange.
@@ -97,6 +120,8 @@ class FileExchangeBackend:
     while allowing Codex subagents, other sessions, or a human operator to fill
     agent outputs.
     """
+
+    backend_name = "manual"
 
     def __init__(
         self,
@@ -143,6 +168,9 @@ class FileExchangeBackend:
                 raise TimeoutError(f"Timed out waiting for {response_path}")
             time.sleep(self.poll_interval_seconds)
 
+    def complete_many(self, calls: list[AgentCall]) -> list[str]:
+        return [self.complete(call.role, call.prompt, call.context) for call in calls]
+
     def _call_id(self, role: str, context: dict[str, Any]) -> str:
         problem_id = context.get("problem", {}).get("problem_id", "unknown_problem")
         approach_id = context.get("approach", {}).get("approach_id")
@@ -159,6 +187,127 @@ class FileExchangeBackend:
             f"Write the response JSON to `{response_path.name}` in this same pending directory.\n"
             "Return only valid JSON. Do not wrap it in Markdown. Do not use web search or external retrieval.\n"
             "Use only the public problem context in this prompt. Hidden reference proofs are not available.\n\n"
+            "## Required Response JSON Schema\n\n"
+            "```json\n"
+            f"{json.dumps(schema, indent=2, sort_keys=True)}\n"
+            "```\n"
+        )
+
+
+class CodexSubagentBackend:
+    """Backend that runs one Codex CLI task per agent call.
+
+    Worker batches use separate `codex exec` processes so uniform workers and
+    PI-assigned workers can execute concurrently. The backend keeps all prompts
+    and process outputs under logs/<run_id>/codex_subagents.
+    """
+
+    backend_name = "codex_subagents"
+
+    def __init__(
+        self,
+        artifact_dir: Path | str,
+        max_parallel: int | None = None,
+        timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
+    ):
+        self.artifact_dir = Path(artifact_dir)
+        self.artifact_dir.mkdir(parents=True, exist_ok=True)
+        self.max_parallel = max_parallel or int(os.environ.get("CODEX_SUBAGENT_MAX_PARALLEL", "4"))
+        self.timeout_seconds = timeout_seconds or _optional_float(os.environ.get("CODEX_SUBAGENT_TIMEOUT_SECONDS"))
+        self.reasoning_effort = reasoning_effort or os.environ.get("CODEX_SUBAGENT_REASONING_EFFORT")
+        self._call_index = 0
+        self.command = _codex_command()
+
+    def complete(self, role: str, prompt: str, context: dict[str, Any]) -> str:
+        return self.complete_many([AgentCall(role=role, prompt=prompt, context=context)])[0]
+
+    def complete_many(self, calls: list[AgentCall]) -> list[str]:
+        indexed_calls = []
+        for call in calls:
+            self._call_index += 1
+            indexed_calls.append((self._call_index, call))
+        if len(indexed_calls) == 1:
+            return [self._run_call(indexed_calls[0][0], indexed_calls[0][1])]
+        with ThreadPoolExecutor(max_workers=min(self.max_parallel, len(indexed_calls))) as executor:
+            futures = [executor.submit(self._run_call, index, call) for index, call in indexed_calls]
+            return [future.result() for future in futures]
+
+    def _run_call(self, call_index: int, call: AgentCall) -> str:
+        call_id = self._call_id(call_index, call.role, call.context)
+        workspace_path = self.artifact_dir / f"{call_id}_workspace"
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        prompt_path = self.artifact_dir / f"{call_id}_prompt.md"
+        schema_path = self.artifact_dir / f"{call_id}_schema.json"
+        response_path = self.artifact_dir / f"{call_id}_response.json"
+        stdout_path = self.artifact_dir / f"{call_id}_stdout.txt"
+        stderr_path = self.artifact_dir / f"{call_id}_stderr.txt"
+        schema = _required_response_schema(call.role)
+        codex_prompt = self._codex_prompt(call.role, call.prompt)
+        prompt_path.write_text(codex_prompt, encoding="utf-8")
+        schema_path.write_text(json.dumps(schema, indent=2, sort_keys=True), encoding="utf-8")
+
+        command = [
+            *self.command,
+            "exec",
+            "--cd",
+            str(workspace_path),
+            "--sandbox",
+            "read-only",
+            "--skip-git-repo-check",
+            "--ephemeral",
+            "--output-schema",
+            str(schema_path),
+            "--output-last-message",
+            str(response_path),
+        ]
+        command.extend(_codex_extra_args())
+        model = os.environ.get("CODEX_SUBAGENT_MODEL")
+        if model:
+            command.extend(["--model", model])
+        if self.reasoning_effort:
+            command.extend(["-c", f'model_reasoning_effort="{self.reasoning_effort}"'])
+        command.append("-")
+
+        completed = subprocess.run(
+            command,
+            input=codex_prompt,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_seconds,
+            check=False,
+        )
+        stdout_path.write_text(completed.stdout or "", encoding="utf-8")
+        stderr_path.write_text(completed.stderr or "", encoding="utf-8")
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"Codex subagent failed for {call_id} with exit code {completed.returncode}. "
+                f"See {stderr_path}."
+            )
+        if not response_path.exists():
+            raise RuntimeError(f"Codex subagent did not write response file for {call_id}: {response_path}")
+        response = response_path.read_text(encoding="utf-8")
+        payload = _parse_json_response(response)
+        _validate_manual_response(call.role, payload, call.context)
+        return response
+
+    def _call_id(self, call_index: int, role: str, context: dict[str, Any]) -> str:
+        problem_id = context.get("problem", {}).get("problem_id", "unknown_problem")
+        approach_id = context.get("approach", {}).get("approach_id")
+        parts = [f"{call_index:04d}", role, str(problem_id)]
+        if approach_id:
+            parts.append(str(approach_id))
+        return "_".join(_safe_token(part) for part in parts)
+
+    def _codex_prompt(self, role: str, prompt: str) -> str:
+        schema = _required_response_schema(role)
+        return (
+            f"{prompt.rstrip()}\n\n"
+            "## Codex Subagent Instructions\n\n"
+            "You are running as an isolated Codex subagent for one theorem-proving role.\n"
+            "Use only the public problem context in this prompt and local Lean knowledge.\n"
+            "Do not inspect benchmark solution files, hidden reference proofs, GitHub, or the web.\n"
+            "Return only valid JSON matching the schema below. Do not wrap it in Markdown.\n\n"
             "## Required Response JSON Schema\n\n"
             "```json\n"
             f"{json.dumps(schema, indent=2, sort_keys=True)}\n"
@@ -191,6 +340,7 @@ class DirectAgent:
             agent_type="direct",
             candidate_lean_code=str(payload.get("candidate_lean_code", "")).strip(),
             reasoning_summary=str(payload.get("reasoning_summary", "")).strip(),
+            backend_name=self.backend.backend_name,
             prompt=prompt,
             response=response,
             estimated_tokens=estimate_tokens(prompt, response),
@@ -231,7 +381,49 @@ class WorkerAgent:
             prompt=prompt,
             response=response,
             estimated_tokens=estimate_tokens(prompt, response),
+            backend_name=self.backend.backend_name,
         )
+
+    def attempt_many(
+        self,
+        problem: Problem,
+        approaches: list[Approach],
+        prior_reports: list[WorkerReport],
+        lean_feedback: list[str],
+    ) -> list[WorkerReport]:
+        prompts: list[str] = []
+        calls: list[AgentCall] = []
+        for approach in approaches:
+            context = {
+                "problem": problem.public_payload(),
+                "approach": approach.model_dump(mode="json"),
+                "prior_reports": [report.model_dump(mode="json") for report in prior_reports],
+                "lean_feedback": lean_feedback,
+            }
+            prompt = _render_prompt(self.prompts.load("worker_agent.md"), context)
+            prompts.append(prompt)
+            calls.append(AgentCall(role="worker", prompt=prompt, context=context))
+        responses = self.backend.complete_many(calls)
+        reports: list[WorkerReport] = []
+        for approach, prompt, response in zip(approaches, prompts, responses, strict=True):
+            payload = _parse_json_response(response)
+            progress = _coerce_progress_type(payload.get("progress_claim"))
+            reports.append(
+                WorkerReport(
+                    approach_id=approach.approach_id,
+                    approach_description=approach.description,
+                    candidate_lean_code=str(payload.get("candidate_lean_code", "")).strip(),
+                    useful_artifacts=list(payload.get("useful_artifacts") or []),
+                    stuck_reason=payload.get("stuck_reason"),
+                    progress_claim=progress,
+                    report_text=str(payload.get("report_text", "")).strip(),
+                    prompt=prompt,
+                    response=response,
+                    estimated_tokens=estimate_tokens(prompt, response),
+                    backend_name=self.backend.backend_name,
+                )
+            )
+        return reports
 
 
 class PIAgent:
@@ -254,7 +446,7 @@ class PIAgent:
         }
         prompt = _render_prompt(self.prompts.load("pi_initial.md"), context)
         response = self.backend.complete("pi_initial", prompt, context)
-        return _parse_pi_update(prompt, response)
+        return _parse_pi_update(prompt, response, self.backend.backend_name)
 
     def update(
         self,
@@ -273,12 +465,34 @@ class PIAgent:
         }
         prompt = _render_prompt(self.prompts.load("pi_update.md"), context)
         response = self.backend.complete("pi_update", prompt, context)
-        return _parse_pi_update(prompt, response)
+        return _parse_pi_update(prompt, response, self.backend.backend_name)
 
 
 def estimate_tokens(*texts: str) -> int:
     total_chars = sum(len(text or "") for text in texts)
     return max(1, (total_chars + 3) // 4)
+
+
+def _codex_command() -> list[str]:
+    configured = os.environ.get("CODEX_SUBAGENT_COMMAND")
+    if configured:
+        return shlex.split(configured)
+    discovered = shutil.which("codex")
+    if discovered:
+        return [discovered]
+    app_path = Path("/Applications/Codex.app/Contents/Resources/codex")
+    if app_path.exists():
+        return [str(app_path)]
+    raise RuntimeError("Could not find Codex CLI. Use --backend manual or set CODEX_SUBAGENT_COMMAND.")
+
+
+def _codex_extra_args() -> list[str]:
+    configured = os.environ.get("CODEX_SUBAGENT_EXTRA_ARGS")
+    return shlex.split(configured) if configured else []
+
+
+def _optional_float(value: str | None) -> float | None:
+    return float(value) if value else None
 
 
 def _render_prompt(template: str, context: dict[str, Any]) -> str:
@@ -300,7 +514,7 @@ def _parse_json_response(response: str) -> dict[str, Any]:
     return {}
 
 
-def _parse_pi_update(prompt: str, response: str) -> PIUpdate:
+def _parse_pi_update(prompt: str, response: str, backend_name: str = "") -> PIUpdate:
     payload = _parse_json_response(response)
     try:
         update = PIUpdate.model_validate(payload)
@@ -308,6 +522,7 @@ def _parse_pi_update(prompt: str, response: str) -> PIUpdate:
         update = PIUpdate(summary="Could not parse PI response.")
     update.prompt = prompt
     update.response = response
+    update.backend_name = backend_name
     update.estimated_tokens = estimate_tokens(prompt, response)
     return update
 
@@ -397,7 +612,14 @@ def _required_response_schema(role: str) -> dict[str, Any]:
                     "type": "array",
                     "items": {
                         "type": "object",
-                        "required": ["approach_id", "belief_score", "uncertainty_score", "rationale"],
+                        "required": [
+                            "approach_id",
+                            "belief_score",
+                            "uncertainty_score",
+                            "rationale",
+                            "evidence_for",
+                            "evidence_against",
+                        ],
                         "properties": {
                             "approach_id": {"type": "string"},
                             "belief_score": {"type": "number", "minimum": 0, "maximum": 1},
@@ -406,6 +628,7 @@ def _required_response_schema(role: str) -> dict[str, Any]:
                             "evidence_for": {"type": "array", "items": {"type": "string"}},
                             "evidence_against": {"type": "array", "items": {"type": "string"}},
                         },
+                        "additionalProperties": False,
                     },
                 },
                 "killed_approaches": {"type": "array", "items": {"type": "string"}},
@@ -418,6 +641,7 @@ def _required_response_schema(role: str) -> dict[str, Any]:
                             "approach_id": {"type": "string"},
                             "description": {"type": "string"},
                         },
+                        "additionalProperties": False,
                     },
                 },
                 "assignments": {
@@ -431,6 +655,7 @@ def _required_response_schema(role: str) -> dict[str, Any]:
                             "effort_budget": {"type": "integer", "minimum": 0},
                             "rationale": {"type": "string"},
                         },
+                        "additionalProperties": False,
                     },
                 },
                 "summary": {"type": "string"},
