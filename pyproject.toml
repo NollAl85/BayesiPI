@@ -1,0 +1,14 @@
+[project]
+name = "theorem-pi-experiment"
+version = "0.1.0"
+description = "Local Lean theorem-proving experiment harness for PI-guided allocation research."
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2",
+  "PyYAML>=6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
