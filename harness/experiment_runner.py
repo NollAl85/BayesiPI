@@ -7,6 +7,7 @@ from typing import Iterable
 import yaml
 
 from harness.agents import (
+    CodexSubagentBackend,
     DeterministicToyBackend,
     DirectAgent,
     FileExchangeBackend,
@@ -84,6 +85,9 @@ class BudgetTracker:
             return True
         return self.estimated_tokens < self.config.max_estimated_tokens
 
+    def remaining_agent_calls(self) -> int:
+        return max(0, self.config.max_llm_calls - self.llm_calls)
+
     def record_agent_call(self, estimated_tokens: int) -> None:
         self.llm_calls += 1
         self.estimated_tokens += estimated_tokens
@@ -93,6 +97,9 @@ class BudgetTracker:
 
     def record_lean_call(self) -> None:
         self.lean_calls += 1
+
+    def remaining_lean_calls(self) -> int:
+        return max(0, self.config.max_lean_calls - self.lean_calls)
 
     def exhausted_reason(self) -> str:
         if self.rounds >= self.config.max_rounds:
@@ -118,6 +125,7 @@ class ExperimentRunner:
         project_root: Path | str | None = None,
         run_id: str | None = None,
         backend_name: str = "deterministic",
+        subagent_reasoning_effort: str | None = None,
     ):
         self.config = config
         self.project_root = Path(project_root) if project_root else Path(__file__).resolve().parents[1]
@@ -125,6 +133,8 @@ class ExperimentRunner:
         self.logger = RunLogger(self.project_root / "logs", self.run_id)
         self.lean_runner = LeanRunner(config.lean_command, config.lean_timeout_seconds)
         prompt_library = PromptLibrary(self.project_root / "prompts")
+        self.backend_name = backend_name
+        self.subagent_reasoning_effort = subagent_reasoning_effort
         backend = self._build_backend(backend_name)
         self.direct_agent = DirectAgent(backend, prompt_library)
         self.worker_agent = WorkerAgent(backend, prompt_library)
@@ -182,12 +192,21 @@ class ExperimentRunner:
         self.logger.log_event("condition_start", {"condition": "uniform", "problem_id": problem.problem_id})
         while tracker.can_start_round() and proof is None:
             tracker.start_round()
-            for approach in approaches:
-                if not tracker.can_call_agent() or not tracker.can_call_lean():
-                    break
-                report = self.worker_agent.attempt(problem, approach, reports, lean_feedback)
+            batch_size = min(len(approaches), tracker.remaining_agent_calls(), tracker.remaining_lean_calls())
+            if batch_size <= 0 or not tracker.can_call_agent() or not tracker.can_call_lean():
+                break
+            batch_reports = self.worker_agent.attempt_many(
+                problem,
+                approaches[:batch_size],
+                reports,
+                lean_feedback,
+            )
+            for report in batch_reports:
                 tracker.record_agent_call(report.estimated_tokens)
                 self._log_worker_report("uniform", problem, report)
+            for report in batch_reports:
+                if not tracker.can_call_lean():
+                    break
                 result = self.lean_runner.check(problem, report.candidate_lean_code)
                 tracker.record_lean_call()
                 report.lean_result = result
@@ -197,10 +216,10 @@ class ExperimentRunner:
                 self._log_lean_result("uniform", problem, result)
                 self.logger.log_event("uniform_worker_report", model_to_jsonable(report))
                 reports.append(report)
-                if result.success:
+                if result.success and proof is None:
                     proof = report.candidate_lean_code
-                    break
-                lean_feedback.append(result.error_summary)
+                if not result.success:
+                    lean_feedback.append(result.error_summary)
         return self._condition_result(problem, Condition.uniform, tracker, proof)
 
     def run_pi(self, problem: Problem) -> ConditionResult:
@@ -226,13 +245,25 @@ class ExperimentRunner:
             if not assignments:
                 assignments = self._fallback_assignments(approaches)
             round_reports: list[WorkerReport] = []
-            for assignment in assignments[: self.config.workers_per_round]:
-                if not tracker.can_call_agent() or not tracker.can_call_lean():
-                    break
-                approach = self._find_approach(approaches, assignment.approach_id)
-                report = self.worker_agent.attempt(problem, approach, reports, lean_feedback)
+            batch_size = min(
+                len(assignments),
+                self.config.workers_per_round,
+                tracker.remaining_agent_calls(),
+                tracker.remaining_lean_calls(),
+            )
+            if batch_size <= 0 or not tracker.can_call_agent() or not tracker.can_call_lean():
+                break
+            batch_approaches = [
+                self._find_approach(approaches, assignment.approach_id)
+                for assignment in assignments[:batch_size]
+            ]
+            batch_reports = self.worker_agent.attempt_many(problem, batch_approaches, reports, lean_feedback)
+            for report in batch_reports:
                 tracker.record_agent_call(report.estimated_tokens)
                 self._log_worker_report("pi_worker", problem, report)
+            for report in batch_reports:
+                if not tracker.can_call_lean():
+                    break
                 result = self.lean_runner.check(problem, report.candidate_lean_code)
                 tracker.record_lean_call()
                 report.lean_result = result
@@ -243,10 +274,10 @@ class ExperimentRunner:
                 self.logger.log_event("pi_worker_report", model_to_jsonable(report))
                 reports.append(report)
                 round_reports.append(report)
-                if result.success:
+                if result.success and proof is None:
                     proof = report.candidate_lean_code
-                    break
-                lean_feedback.append(result.error_summary)
+                if not result.success:
+                    lean_feedback.append(result.error_summary)
             if proof is not None:
                 break
             if tracker.can_call_agent():
@@ -295,6 +326,11 @@ class ExperimentRunner:
             return DeterministicToyBackend()
         if backend_name == "manual":
             return FileExchangeBackend(self.logger.pending_dir)
+        if backend_name == "codex_subagents":
+            return CodexSubagentBackend(
+                self.logger.codex_subagents_dir,
+                reasoning_effort=self.subagent_reasoning_effort,
+            )
         raise ValueError(f"Unknown backend: {backend_name}")
 
     def _fallback_assignments(self, approaches: list[Approach]):
@@ -321,7 +357,7 @@ class ExperimentRunner:
             f"{label}_{problem.problem_id}",
             attempt.prompt,
             attempt.response,
-            {"estimated_tokens": attempt.estimated_tokens},
+            {"estimated_tokens": attempt.estimated_tokens, "backend_name": attempt.backend_name},
         )
 
     def _log_worker_report(self, label: str, problem: Problem, report: WorkerReport) -> None:
@@ -329,7 +365,7 @@ class ExperimentRunner:
             f"{label}_{problem.problem_id}_{report.approach_id}",
             report.prompt,
             report.response,
-            {"estimated_tokens": report.estimated_tokens},
+            {"estimated_tokens": report.estimated_tokens, "backend_name": report.backend_name},
         )
 
     def _log_pi_update(self, label: str, problem: Problem, update: PIUpdate) -> None:
@@ -337,7 +373,7 @@ class ExperimentRunner:
             f"{label}_{problem.problem_id}",
             update.prompt,
             update.response,
-            {"estimated_tokens": update.estimated_tokens},
+            {"estimated_tokens": update.estimated_tokens, "backend_name": update.backend_name},
         )
         self.logger.log_event(label, model_to_jsonable(update))
 

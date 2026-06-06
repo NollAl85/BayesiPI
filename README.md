@@ -38,6 +38,23 @@ python3 scripts/run_experiment.py benchmark/problems/basic_lean_01.jsonl --backe
 
 Each agent call writes a prompt to `logs/<run_id>/pending/<call_id>_prompt.md` and waits for `logs/<run_id>/pending/<call_id>_response.json`. Open the prompt, send it to Codex or a subagent, save the JSON response file, and the experiment will continue.
 
+For an automated Codex CLI run:
+
+```bash
+python3 scripts/run_experiment.py benchmark/problems/basic_lean_01.jsonl --backend codex_subagents --subagent-reasoning-effort low --run-id basic_codex_01
+```
+
+This runs one isolated `codex exec` task per agent call. `direct` uses one task per proof attempt, `uniform` starts one worker task per approach in the round, and `pi` first starts a PI planning task before starting worker tasks from the PI assignments. Lean is still run locally by the harness after every worker response.
+
+Useful environment variables:
+
+- `CODEX_SUBAGENT_COMMAND`: override the Codex CLI command.
+- `CODEX_SUBAGENT_MODEL`: pass a model to Codex.
+- `CODEX_SUBAGENT_REASONING_EFFORT`: set Codex reasoning effort, for example `low`, `medium`, `high`, or `xhigh`.
+- `CODEX_SUBAGENT_EXTRA_ARGS`: append other extra `codex exec` flags.
+- `CODEX_SUBAGENT_MAX_PARALLEL`: cap concurrent worker tasks.
+- `CODEX_SUBAGENT_TIMEOUT_SECONDS`: set a per-task timeout.
+
 ## Benchmark Validation
 
 `basic_lean_02` keeps public problems and private reference proofs separate:
@@ -80,6 +97,8 @@ logs/<run_id>/
   prompts/
   responses/
   lean/
+  pending/
+  codex_subagents/
   summary.csv
 ```
 

@@ -68,6 +68,7 @@ class AgentAttempt(BaseModel):
     candidate_lean_code: str
     reasoning_summary: str = ""
     approach_id: str | None = None
+    backend_name: str = ""
     prompt: str = ""
     response: str = ""
     estimated_tokens: int = 0
@@ -85,6 +86,7 @@ class WorkerReport(BaseModel):
     stuck_reason: str | None = None
     progress_claim: ProgressType = ProgressType.no_progress
     report_text: str = ""
+    backend_name: str = ""
     prompt: str = ""
     response: str = ""
     estimated_tokens: int = 0
@@ -113,6 +115,7 @@ class PIUpdate(BaseModel):
     new_approaches: list[Approach] = Field(default_factory=list)
     assignments: list[PIAssignment] = Field(default_factory=list)
     summary: str = ""
+    backend_name: str = ""
     prompt: str = ""
     response: str = ""
     estimated_tokens: int = 0
