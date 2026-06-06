@@ -1,0 +1,34 @@
+run_id_prefix: basic03
+lean_command:
+  - lean
+max_rounds: 3
+workers_per_round: 2
+max_llm_calls: 8
+max_lean_calls: 8
+max_wall_seconds: 600
+lean_timeout_seconds: 20
+max_estimated_tokens: null
+uniform_policy: round_robin
+uniform_seed: 3
+conditions:
+  - direct
+  - uniform
+  - pi_initial_only
+  - pi
+approaches:
+  - approach_id: induction
+    description: Try structural induction over the main Nat/List/Tree argument and simplify recursive definitions.
+  - approach_id: generalized_induction
+    description: Look for a stronger induction hypothesis or accumulator-generalized lemma before proving the target.
+  - approach_id: cases
+    description: Try case analysis, constructors, and witness extraction for Or, Option, Bool, Exists, and finite structures.
+  - approach_id: rewriting_simp
+    description: Try local rewriting, simp, associativity/commutativity cleanup, and chained equalities.
+  - approach_id: auxiliary_lemma
+    description: Propose and prove a small helper lemma that would simplify the main theorem.
+  - approach_id: library_search
+    description: Use only local Lean/Mathlib knowledge and local search, if available, to identify relevant existing lemmas.
+  - approach_id: counterexample_boundary
+    description: Try small cases or inspect definitions to identify whether the statement needs strengthening or has missing assumptions.
+  - approach_id: constructor_extensionality
+    description: Use constructors, extensionality-style reasoning, and equality of recursive structures where appropriate.

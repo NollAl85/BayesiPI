@@ -21,33 +21,24 @@ from harness.schemas import Condition
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("benchmark_jsonl", type=Path)
-    parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config" / "default.yaml")
+    parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config" / "basic_lean_03_allocation.yaml")
     parser.add_argument(
         "--backend",
         choices=["deterministic", "manual", "codex_subagents"],
         default="manual",
-        help="Agent backend. Use manual for file exchange or codex_subagents for Codex CLI tasks.",
+        help="Agent backend for the uniform probe.",
     )
-    parser.add_argument(
-        "--subagent-reasoning-effort",
-        default=None,
-        help="Optional Codex reasoning effort for codex_subagents, for example low, medium, high, or xhigh.",
-    )
-    parser.add_argument("--run-id", default=None, help="Optional explicit run ID for reproducible log paths.")
-    parser.add_argument(
-        "--condition",
-        action="append",
-        choices=[condition.value for condition in Condition],
-        help="Condition to run. Repeat to run multiple. Defaults to config conditions.",
-    )
-    parser.add_argument("--limit", type=int, default=None, help="Optional maximum number of problems to run.")
+    parser.add_argument("--subagent-reasoning-effort", default=None)
+    parser.add_argument("--run-id", default="uniform_probe")
+    parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
 
     config = load_config(args.config)
-    conditions = [Condition(value) for value in args.condition] if args.condition else None
+    config.conditions = [Condition.uniform]
     problems = load_jsonl(args.benchmark_jsonl)
     if args.limit is not None:
         problems = problems[: args.limit]
+
     runner = ExperimentRunner(
         config,
         PROJECT_ROOT,
@@ -55,7 +46,7 @@ def main() -> None:
         backend_name=args.backend,
         subagent_reasoning_effort=args.subagent_reasoning_effort,
     )
-    rows = runner.run_all(problems, conditions)
+    rows = runner.run_all(problems, [Condition.uniform])
     summary_path = runner.logger.run_dir / "summary.csv"
     aggregate_path = write_aggregate_csv(summary_path)
     solved = sum(1 for row in rows if row.solved)

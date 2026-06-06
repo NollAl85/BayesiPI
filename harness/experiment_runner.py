@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import random
 import time
 from pathlib import Path
 from typing import Iterable
@@ -151,11 +153,14 @@ class ExperimentRunner:
                     rows.append(self.run_direct(problem))
                 elif condition == Condition.uniform:
                     rows.append(self.run_uniform(problem))
+                elif condition == Condition.pi_initial_only:
+                    rows.append(self.run_pi(problem, update_enabled=False, condition=Condition.pi_initial_only))
                 elif condition == Condition.pi:
                     rows.append(self.run_pi(problem))
                 else:
                     raise ValueError(f"Unsupported condition: {condition}")
         self.logger.write_summary(rows)
+        self.logger.write_approach_trace()
         return rows
 
     def run_direct(self, problem: Problem) -> ConditionResult:
@@ -177,6 +182,19 @@ class ExperimentRunner:
             attempt.lean_result = result
             self._log_lean_result("direct", problem, result)
             self.logger.log_event("direct_attempt", model_to_jsonable(attempt))
+            self._log_trace(
+                problem=problem,
+                condition=Condition.direct,
+                round_number=tracker.rounds,
+                approach_id="direct",
+                agent_role="direct",
+                progress_claim="",
+                lean_success=result.success,
+                proof_found=result.success,
+                estimated_tokens=attempt.estimated_tokens,
+                lean_calls_so_far=tracker.lean_calls,
+                llm_calls_so_far=tracker.llm_calls,
+            )
             if result.success:
                 proof = attempt.candidate_lean_code
                 break
@@ -188,16 +206,17 @@ class ExperimentRunner:
         proof: str | None = None
         reports: list[WorkerReport] = []
         lean_feedback: list[str] = []
-        approaches = self._approaches()[: self.config.workers_per_round]
+        approaches = self._uniform_approaches(problem)
         self.logger.log_event("condition_start", {"condition": "uniform", "problem_id": problem.problem_id})
         while tracker.can_start_round() and proof is None:
             tracker.start_round()
-            batch_size = min(len(approaches), tracker.remaining_agent_calls(), tracker.remaining_lean_calls())
+            round_approaches = self._uniform_round_approaches(approaches, tracker.rounds)
+            batch_size = min(len(round_approaches), tracker.remaining_agent_calls(), tracker.remaining_lean_calls())
             if batch_size <= 0 or not tracker.can_call_agent() or not tracker.can_call_lean():
                 break
             batch_reports = self.worker_agent.attempt_many(
                 problem,
-                approaches[:batch_size],
+                round_approaches[:batch_size],
                 reports,
                 lean_feedback,
             )
@@ -215,6 +234,19 @@ class ExperimentRunner:
                 report.remaining_goals = result.remaining_goals
                 self._log_lean_result("uniform", problem, result)
                 self.logger.log_event("uniform_worker_report", model_to_jsonable(report))
+                self._log_trace(
+                    problem=problem,
+                    condition=Condition.uniform,
+                    round_number=tracker.rounds,
+                    approach_id=report.approach_id,
+                    agent_role="worker",
+                    progress_claim=report.progress_claim.value,
+                    lean_success=result.success,
+                    proof_found=result.success,
+                    estimated_tokens=report.estimated_tokens,
+                    lean_calls_so_far=tracker.lean_calls,
+                    llm_calls_so_far=tracker.llm_calls,
+                )
                 reports.append(report)
                 if result.success and proof is None:
                     proof = report.candidate_lean_code
@@ -222,14 +254,20 @@ class ExperimentRunner:
                     lean_feedback.append(result.error_summary)
         return self._condition_result(problem, Condition.uniform, tracker, proof)
 
-    def run_pi(self, problem: Problem) -> ConditionResult:
+    def run_pi(
+        self,
+        problem: Problem,
+        update_enabled: bool = True,
+        condition: Condition = Condition.pi,
+    ) -> ConditionResult:
         tracker = BudgetTracker(self.config)
         proof: str | None = None
         approaches = self._approaches()
         reports: list[WorkerReport] = []
         lean_feedback: list[str] = []
         assignments = []
-        self.logger.log_event("condition_start", {"condition": "pi", "problem_id": problem.problem_id})
+        pi_beliefs: dict[str, float] = {}
+        self.logger.log_event("condition_start", {"condition": condition.value, "problem_id": problem.problem_id})
         if tracker.can_call_agent():
             initial = self.pi_agent.initial_plan(
                 problem,
@@ -240,6 +278,8 @@ class ExperimentRunner:
             tracker.record_agent_call(initial.estimated_tokens)
             assignments = initial.assignments
             self._log_pi_update("pi_initial", problem, initial)
+            pi_beliefs.update({belief.approach_id: belief.belief_score for belief in initial.updated_beliefs})
+            self._log_pi_trace(problem, condition, "pi_initial", tracker, initial, {})
         while tracker.can_start_round() and proof is None:
             tracker.start_round()
             if not assignments:
@@ -272,6 +312,20 @@ class ExperimentRunner:
                 report.remaining_goals = result.remaining_goals
                 self._log_lean_result("pi_worker", problem, result)
                 self.logger.log_event("pi_worker_report", model_to_jsonable(report))
+                self._log_trace(
+                    problem=problem,
+                    condition=condition,
+                    round_number=tracker.rounds,
+                    approach_id=report.approach_id,
+                    agent_role="worker",
+                    progress_claim=report.progress_claim.value,
+                    lean_success=result.success,
+                    proof_found=result.success,
+                    pi_belief_before=pi_beliefs.get(report.approach_id),
+                    estimated_tokens=report.estimated_tokens,
+                    lean_calls_so_far=tracker.lean_calls,
+                    llm_calls_so_far=tracker.llm_calls,
+                )
                 reports.append(report)
                 round_reports.append(report)
                 if result.success and proof is None:
@@ -280,7 +334,7 @@ class ExperimentRunner:
                     lean_feedback.append(result.error_summary)
             if proof is not None:
                 break
-            if tracker.can_call_agent():
+            if update_enabled and tracker.can_call_agent():
                 update = self.pi_agent.update(
                     problem,
                     approaches,
@@ -292,7 +346,10 @@ class ExperimentRunner:
                 assignments = update.assignments
                 approaches.extend(update.new_approaches)
                 self._log_pi_update("pi_update", problem, update)
-        return self._condition_result(problem, Condition.pi, tracker, proof)
+                previous_beliefs = dict(pi_beliefs)
+                pi_beliefs.update({belief.approach_id: belief.belief_score for belief in update.updated_beliefs})
+                self._log_pi_trace(problem, condition, "pi_update", tracker, update, previous_beliefs)
+        return self._condition_result(problem, condition, tracker, proof)
 
     def _condition_result(
         self,
@@ -320,6 +377,27 @@ class ExperimentRunner:
 
     def _approaches(self) -> list[Approach]:
         return self.config.approaches or DEFAULT_APPROACHES
+
+    def _uniform_approaches(self, problem: Problem) -> list[Approach]:
+        approaches = list(self._approaches())
+        policy = self.config.uniform_policy
+        if policy == "first_k" or len(approaches) <= 1:
+            return approaches
+        if policy == "round_robin":
+            offset = _stable_offset(problem.problem_id, len(approaches), self.config.uniform_seed)
+            return approaches[offset:] + approaches[:offset]
+        if policy == "seeded_shuffle":
+            rng = random.Random(f"{self.config.uniform_seed}:{problem.problem_id}")
+            rng.shuffle(approaches)
+            return approaches
+        raise ValueError(f"Unknown uniform_policy: {policy}")
+
+    def _uniform_round_approaches(self, approaches: list[Approach], round_number: int) -> list[Approach]:
+        if self.config.uniform_policy == "first_k":
+            return approaches[: self.config.workers_per_round]
+        offset = ((round_number - 1) * self.config.workers_per_round) % len(approaches)
+        rotated = approaches[offset:] + approaches[:offset]
+        return rotated[: self.config.workers_per_round]
 
     def _build_backend(self, backend_name: str):
         if backend_name == "deterministic":
@@ -385,8 +463,78 @@ class ExperimentRunner:
             result.stderr,
         )
 
+    def _log_pi_trace(
+        self,
+        problem: Problem,
+        condition: Condition,
+        agent_role: str,
+        tracker: BudgetTracker,
+        update: PIUpdate,
+        previous_beliefs: dict[str, float],
+    ) -> None:
+        beliefs_after = {belief.approach_id: belief.belief_score for belief in update.updated_beliefs}
+        trace_approach_ids = [assignment.approach_id for assignment in update.assignments]
+        if not trace_approach_ids:
+            trace_approach_ids = [belief.approach_id for belief in update.updated_beliefs]
+        for approach_id in trace_approach_ids:
+            self._log_trace(
+                problem=problem,
+                condition=condition,
+                round_number=tracker.rounds,
+                approach_id=approach_id,
+                agent_role=agent_role,
+                progress_claim="",
+                lean_success="",
+                proof_found="",
+                pi_belief_before=previous_beliefs.get(approach_id),
+                pi_belief_after=beliefs_after.get(approach_id),
+                estimated_tokens=update.estimated_tokens,
+                lean_calls_so_far=tracker.lean_calls,
+                llm_calls_so_far=tracker.llm_calls,
+            )
+
+    def _log_trace(
+        self,
+        problem: Problem,
+        condition: Condition,
+        round_number: int,
+        approach_id: str,
+        agent_role: str,
+        progress_claim: str,
+        lean_success,
+        proof_found,
+        estimated_tokens: int,
+        lean_calls_so_far: int,
+        llm_calls_so_far: int,
+        pi_belief_before: float | None = None,
+        pi_belief_after: float | None = None,
+    ) -> None:
+        self.logger.log_approach_trace(
+            {
+                "run_id": self.run_id,
+                "problem_id": problem.problem_id,
+                "condition": condition.value,
+                "round": round_number,
+                "approach_id": approach_id,
+                "agent_role": agent_role,
+                "progress_claim": progress_claim,
+                "lean_success": lean_success,
+                "proof_found": proof_found,
+                "pi_belief_before": "" if pi_belief_before is None else pi_belief_before,
+                "pi_belief_after": "" if pi_belief_after is None else pi_belief_after,
+                "estimated_tokens": estimated_tokens,
+                "lean_calls_so_far": lean_calls_so_far,
+                "llm_calls_so_far": llm_calls_so_far,
+            }
+        )
+
 
 def load_config(path: Path | str) -> ExperimentConfig:
     with Path(path).open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
     return ExperimentConfig.model_validate(payload)
+
+
+def _stable_offset(value: str, modulo: int, seed: int) -> int:
+    digest = hashlib.sha256(f"{seed}:{value}".encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) % modulo

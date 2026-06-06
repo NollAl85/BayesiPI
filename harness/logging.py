@@ -35,6 +35,7 @@ class RunLogger:
         self.codex_subagents_dir.mkdir(exist_ok=True)
         self._event_index = 0
         self._artifact_index = 0
+        self._approach_trace_rows: list[dict[str, Any]] = []
 
     def save_config(self, config: ExperimentConfig) -> None:
         with (self.run_dir / "config.yaml").open("w", encoding="utf-8") as handle:
@@ -110,6 +111,34 @@ class RunLogger:
                 data = model_to_jsonable(row)
                 data["condition"] = row.condition.value
                 writer.writerow(data)
+        return path
+
+    def log_approach_trace(self, row: dict[str, Any]) -> None:
+        self._approach_trace_rows.append(row)
+
+    def write_approach_trace(self) -> Path:
+        path = self.run_dir / "approach_trace.csv"
+        fieldnames = [
+            "run_id",
+            "problem_id",
+            "condition",
+            "round",
+            "approach_id",
+            "agent_role",
+            "progress_claim",
+            "lean_success",
+            "proof_found",
+            "pi_belief_before",
+            "pi_belief_after",
+            "estimated_tokens",
+            "lean_calls_so_far",
+            "llm_calls_so_far",
+        ]
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in self._approach_trace_rows:
+                writer.writerow({field: row.get(field, "") for field in fieldnames})
         return path
 
 

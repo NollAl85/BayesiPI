@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 class Condition(str, Enum):
     direct = "direct"
     uniform = "uniform"
+    pi_initial_only = "pi_initial_only"
     pi = "pi"
 
 
@@ -45,6 +46,7 @@ class Problem(BaseModel):
 class ReferenceSolution(BaseModel):
     problem_id: str
     reference_proof: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Approach(BaseModel):
@@ -131,6 +133,8 @@ class ExperimentConfig(BaseModel):
     max_wall_seconds: int = Field(default=120, ge=1)
     lean_timeout_seconds: int = Field(default=10, ge=1)
     max_estimated_tokens: int | None = Field(default=None, ge=1)
+    uniform_policy: str = "first_k"
+    uniform_seed: int = 0
     conditions: list[Condition] = Field(
         default_factory=lambda: [Condition.direct, Condition.uniform, Condition.pi]
     )

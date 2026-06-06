@@ -69,6 +69,67 @@ To run a tiny-budget direct probe through the manual backend:
 python3 scripts/run_direct_probe.py benchmark/problems/basic_lean_02.jsonl
 ```
 
+`basic_lean_03` is the allocation-sensitive suite. Public problem IDs and theorem names are anonymized (`b3_p001`, `theorem_b3_p001`, ...), while route/category labels live only in solution-side metadata.
+
+Generate or refresh the candidate/final files:
+
+```bash
+python3 scripts/generate_basic_lean_03.py
+```
+
+The generator writes a validated starting selection from a 50-problem candidate
+pool. After low-reasoning direct/uniform probe summaries exist, rerun
+`scripts/select_basic_lean_03.py` to replace that starting selection with an
+empirically filtered one.
+
+Validate the full candidate pool and the selected final suite:
+
+```bash
+python3 scripts/validate_benchmark.py benchmark/candidates/basic_lean_03_candidates.jsonl \
+  --solutions benchmark/candidates/basic_lean_03_candidate_solutions.jsonl
+
+python3 scripts/validate_benchmark.py benchmark/problems/basic_lean_03.jsonl \
+  --solutions benchmark/solutions/basic_lean_03_solutions.jsonl
+```
+
+Probe and select:
+
+```bash
+python3 scripts/run_direct_probe.py benchmark/candidates/basic_lean_03_candidates.jsonl \
+  --config config/basic_lean_03_probe.yaml \
+  --backend codex_subagents \
+  --subagent-reasoning-effort low \
+  --run-id basic03_direct_probe_01 \
+  --limit 30
+
+python3 scripts/run_uniform_probe.py benchmark/candidates/basic_lean_03_candidates.jsonl \
+  --config config/basic_lean_03_allocation.yaml \
+  --backend codex_subagents \
+  --subagent-reasoning-effort low \
+  --run-id basic03_uniform_probe_01 \
+  --limit 30
+
+python3 scripts/select_basic_lean_03.py \
+  --candidates benchmark/candidates/basic_lean_03_candidates.jsonl \
+  --solutions benchmark/candidates/basic_lean_03_candidate_solutions.jsonl \
+  --direct-summary logs/basic03_direct_probe_01/summary.csv \
+  --uniform-summary logs/basic03_uniform_probe_01/summary.csv \
+  --out-problems benchmark/problems/basic_lean_03.jsonl \
+  --out-solutions benchmark/solutions/basic_lean_03_solutions.jsonl \
+  --out-rejected benchmark/candidates/basic_lean_03_rejected.jsonl \
+  --out-rejected-solutions benchmark/candidates/basic_lean_03_rejected_solutions.jsonl
+```
+
+Run the allocation benchmark:
+
+```bash
+python3 scripts/run_experiment.py benchmark/problems/basic_lean_03.jsonl \
+  --config config/basic_lean_03_allocation.yaml \
+  --backend codex_subagents \
+  --subagent-reasoning-effort low \
+  --run-id basic03_low_01
+```
+
 ## Configuration
 
 The default configuration is in `config/default.yaml`.
@@ -100,9 +161,11 @@ logs/<run_id>/
   pending/
   codex_subagents/
   summary.csv
+  aggregate_summary.csv
+  approach_trace.csv
 ```
 
-The event log is append-only JSONL and is the main source for later analysis.
+The event log is append-only JSONL. `approach_trace.csv` records per-round worker/PI activity, including approaches tried, worker progress claims, Lean success, and PI belief scores when available.
 
 ## Mathlib Notes
 
