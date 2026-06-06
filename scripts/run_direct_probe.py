@@ -24,18 +24,34 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("benchmark_jsonl", type=Path)
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config" / "default.yaml")
+    parser.add_argument(
+        "--backend",
+        choices=["deterministic", "manual", "codex_subagents"],
+        default="manual",
+        help="Agent backend for the direct probe.",
+    )
+    parser.add_argument(
+        "--subagent-reasoning-effort",
+        default=None,
+        help="Optional Codex reasoning effort for codex_subagents.",
+    )
     parser.add_argument("--run-id", default="direct_probe")
+    parser.add_argument("--limit", type=int, default=None, help="Optional maximum number of problems to probe.")
     args = parser.parse_args()
 
     config = load_config(args.config)
     config.conditions = [Condition.direct]
-    config.max_rounds = 1
-    config.max_llm_calls = 1
-    config.max_lean_calls = 1
-    config.max_wall_seconds = min(config.max_wall_seconds, 120)
 
     problems = load_jsonl(args.benchmark_jsonl)
-    runner = ExperimentRunner(config, PROJECT_ROOT, run_id=args.run_id, backend_name="manual")
+    if args.limit is not None:
+        problems = problems[: args.limit]
+    runner = ExperimentRunner(
+        config,
+        PROJECT_ROOT,
+        run_id=args.run_id,
+        backend_name=args.backend,
+        subagent_reasoning_effort=args.subagent_reasoning_effort,
+    )
     rows = runner.run_all(problems, [Condition.direct])
     summary_path = runner.logger.run_dir / "summary.csv"
     aggregate_path = write_aggregate_csv(summary_path)
@@ -69,6 +85,7 @@ def main() -> None:
     print(f"run_dir={runner.logger.run_dir}")
     print(f"summary_csv={summary_path}")
     print(f"aggregate_csv={aggregate_path}")
+    print(f"approach_trace_csv={runner.logger.run_dir / 'approach_trace.csv'}")
     print(f"direct_probe_csv={probe_path}")
     print(f"solved={solved}/{len(rows)}")
 

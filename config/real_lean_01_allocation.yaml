@@ -1,0 +1,36 @@
+run_id_prefix: real01
+lean_command:
+  - lean
+max_rounds: 3
+workers_per_round: 2
+max_llm_calls: 8
+max_lean_calls: 8
+max_wall_seconds: 900
+lean_timeout_seconds: 30
+max_estimated_tokens: null
+uniform_policy: round_robin
+uniform_seed: 3
+conditions:
+  - direct
+  - uniform
+  - pi_initial_only
+  - pi
+approaches:
+  - approach_id: induction
+    description: Try structural induction over the central recursive object, then simplify local definitions and hypotheses.
+  - approach_id: generalized_induction
+    description: Look for a strengthened statement, generalized variables, or accumulator-style lemma before proving the target.
+  - approach_id: cases
+    description: Try case analysis on inductive values, propositions, finite types, options, sums, booleans, and decidable branches.
+  - approach_id: rewriting_simp
+    description: Try local rewriting, simp with the local context, calc chains, and associativity/commutativity cleanup.
+  - approach_id: auxiliary_lemma
+    description: Propose and prove a small local helper lemma that turns the target into simpler subgoals.
+  - approach_id: library_search
+    description: Use local Lean and imported-library knowledge to identify relevant existing lemmas without external search.
+  - approach_id: unfold_definitions
+    description: Unfold relevant local definitions selectively, inspect resulting goals, and avoid unfolding irrelevant abstractions.
+  - approach_id: constructor_extensionality
+    description: Use constructors, extensionality-style reasoning, subtype equality, structure fields, and equality of recursive objects.
+  - approach_id: contradiction_or_boundary
+    description: Inspect impossible cases, boundary assumptions, nonemptiness/properness conditions, and contradiction routes.

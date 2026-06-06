@@ -1,0 +1,17 @@
+run_id_prefix: real01_probe
+lean_command:
+  - lean
+max_rounds: 3
+workers_per_round: 1
+max_llm_calls: 3
+max_lean_calls: 3
+max_wall_seconds: 600
+lean_timeout_seconds: 30
+max_estimated_tokens: null
+uniform_policy: first_k
+uniform_seed: 0
+conditions:
+  - direct
+approaches:
+  - approach_id: direct_probe
+    description: Direct low-budget proof reconstruction probe.

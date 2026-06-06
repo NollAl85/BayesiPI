@@ -23,6 +23,7 @@ class LeanRunner:
         try:
             completed = subprocess.run(
                 [*self.command, str(lean_path)],
+                cwd=problem.project_root or None,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
@@ -62,13 +63,18 @@ class LeanRunner:
 def render_lean_source(problem: Problem, candidate_lean_code: str) -> str:
     imports = "\n".join(f"import {name}" for name in problem.imports)
     body = candidate_lean_code.strip()
-    if _looks_like_complete_lean_file(body):
+    if problem.full_lean_source:
+        rendered = _fill_proof_hole(problem.full_lean_source, problem.proof_placeholder, body)
+    elif problem.proof_placeholder and problem.proof_placeholder in problem.statement:
+        rendered = _fill_proof_hole(problem.statement, problem.proof_placeholder, body)
+    elif _looks_like_complete_lean_file(body):
         rendered = body
     else:
         rendered = f"{problem.statement.strip()} := {body}"
-    if imports:
-        return f"{imports}\n\n{rendered}\n"
-    return f"{rendered}\n"
+    prefix = "\n\n".join(part for part in [imports, problem.preamble.strip()] if part)
+    if prefix:
+        return f"{prefix}\n\n{rendered.strip()}\n"
+    return f"{rendered.strip()}\n"
 
 
 def summarize_lean_errors(stdout: str, stderr: str, lean_source: str = "", max_lines: int = 20) -> str:
@@ -117,6 +123,24 @@ def extract_remaining_goals(stdout: str, stderr: str, max_lines: int = 40) -> li
 def _looks_like_complete_lean_file(value: str) -> bool:
     prefixes = ("import ", "example ", "theorem ", "lemma ", "def ")
     return value.startswith(prefixes) or "\nexample " in value or "\ntheorem " in value
+
+
+def _fill_proof_hole(source: str, placeholder: str, candidate_lean_code: str) -> str:
+    body = candidate_lean_code.strip()
+    if placeholder and placeholder in source:
+        return source.replace(placeholder, body, 1)
+    return _replace_first_sorry(source, body)
+
+
+def _replace_first_sorry(source: str, candidate_lean_code: str) -> str:
+    by_sorry = re.compile(r"by[ \t]*\n(?P<indent>[ \t]*)sorry(?![A-Za-z0-9_])")
+    match = by_sorry.search(source)
+    if match:
+        if candidate_lean_code.startswith("by"):
+            return source[: match.start()] + candidate_lean_code + source[match.end() :]
+        replacement = f"by\n{match.group('indent')}{candidate_lean_code}"
+        return source[: match.start()] + replacement + source[match.end() :]
+    return re.sub(r"(?<![A-Za-z0-9_])sorry(?![A-Za-z0-9_])", candidate_lean_code, source, count=1)
 
 
 def _uses_sorry(lean_source: str, stdout: str, stderr: str) -> bool:

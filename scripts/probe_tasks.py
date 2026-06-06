@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from pathlib import Path
 
@@ -21,30 +22,20 @@ from harness.schemas import Condition
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("benchmark_jsonl", type=Path)
-    parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config" / "default.yaml")
+    parser.add_argument("--config", type=Path, required=True)
     parser.add_argument(
         "--backend",
         choices=["deterministic", "manual", "codex_subagents"],
         default="manual",
-        help="Agent backend. Use manual for file exchange or codex_subagents for Codex CLI tasks.",
     )
-    parser.add_argument(
-        "--subagent-reasoning-effort",
-        default=None,
-        help="Optional Codex reasoning effort for codex_subagents, for example low, medium, high, or xhigh.",
-    )
-    parser.add_argument("--run-id", default=None, help="Optional explicit run ID for reproducible log paths.")
-    parser.add_argument(
-        "--condition",
-        action="append",
-        choices=[condition.value for condition in Condition],
-        help="Condition to run. Repeat to run multiple. Defaults to config conditions.",
-    )
-    parser.add_argument("--limit", type=int, default=None, help="Optional maximum number of problems to run.")
+    parser.add_argument("--subagent-reasoning-effort", default=None)
+    parser.add_argument("--condition", action="append", choices=[condition.value for condition in Condition])
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
 
     config = load_config(args.config)
-    conditions = [Condition(value) for value in args.condition] if args.condition else None
+    conditions = [Condition(value) for value in args.condition] if args.condition else config.conditions
     problems = load_jsonl(args.benchmark_jsonl)
     if args.limit is not None:
         problems = problems[: args.limit]
@@ -58,12 +49,42 @@ def main() -> None:
     rows = runner.run_all(problems, conditions)
     summary_path = runner.logger.run_dir / "summary.csv"
     aggregate_path = write_aggregate_csv(summary_path)
+    probe_path = runner.logger.run_dir / "probe_tasks.csv"
+    _write_probe_csv(probe_path, rows)
     solved = sum(1 for row in rows if row.solved)
     print(f"run_dir={runner.logger.run_dir}")
     print(f"summary_csv={summary_path}")
     print(f"aggregate_csv={aggregate_path}")
     print(f"approach_trace_csv={runner.logger.run_dir / 'approach_trace.csv'}")
+    print(f"probe_tasks_csv={probe_path}")
     print(f"solved={solved}/{len(rows)}")
+
+
+def _write_probe_csv(path: Path, rows) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["problem_id", "condition", "solved", "lean_calls", "rounds", "proof_lines", "notes"],
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "problem_id": row.problem_id,
+                    "condition": row.condition.value,
+                    "solved": row.solved,
+                    "lean_calls": row.lean_calls,
+                    "rounds": row.rounds,
+                    "proof_lines": _proof_lines(row.proof),
+                    "notes": row.notes,
+                }
+            )
+
+
+def _proof_lines(proof: str | None) -> int:
+    if not proof:
+        return 0
+    return sum(1 for line in proof.splitlines() if line.strip())
 
 
 if __name__ == "__main__":

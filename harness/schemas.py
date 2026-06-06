@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 class Condition(str, Enum):
     direct = "direct"
     uniform = "uniform"
+    pi_initial_only = "pi_initial_only"
     pi = "pi"
 
 
@@ -27,6 +28,13 @@ class Problem(BaseModel):
     theorem_name: str | None = None
     imports: list[str] = Field(default_factory=list)
     statement: str
+    task_type: str = "statement"
+    preamble: str = ""
+    full_lean_source: str | None = None
+    proof_placeholder: str = "{{proof}}"
+    project_root: str | None = None
+    module_path: str | None = None
+    expected_theorem_name: str | None = None
     hidden_reference_proof: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -38,6 +46,13 @@ class Problem(BaseModel):
             "theorem_name": self.theorem_name,
             "imports": self.imports,
             "statement": self.statement,
+            "task_type": self.task_type,
+            "preamble": self.preamble,
+            "full_lean_source": self.full_lean_source,
+            "proof_placeholder": self.proof_placeholder,
+            "project_root": self.project_root,
+            "module_path": self.module_path,
+            "expected_theorem_name": self.expected_theorem_name,
             "metadata": self.metadata,
         }
 
@@ -45,6 +60,7 @@ class Problem(BaseModel):
 class ReferenceSolution(BaseModel):
     problem_id: str
     reference_proof: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Approach(BaseModel):
@@ -131,6 +147,8 @@ class ExperimentConfig(BaseModel):
     max_wall_seconds: int = Field(default=120, ge=1)
     lean_timeout_seconds: int = Field(default=10, ge=1)
     max_estimated_tokens: int | None = Field(default=None, ge=1)
+    uniform_policy: str = "first_k"
+    uniform_seed: int = 0
     conditions: list[Condition] = Field(
         default_factory=lambda: [Condition.direct, Condition.uniform, Condition.pi]
     )

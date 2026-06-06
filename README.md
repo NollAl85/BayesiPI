@@ -10,7 +10,8 @@ The harness compares three conditions:
 
 1. `direct`: one agent repeatedly proposes a proof, runs Lean, inspects errors, and retries.
 2. `uniform`: multiple workers explore fixed proof approaches with equal budget and no reallocation.
-3. `pi`: a PI agent proposes approaches, evaluates worker reports, updates beliefs, and reallocates effort.
+3. `pi_initial_only`: a PI agent creates the initial allocation, but later PI belief updates are disabled.
+4. `pi`: a PI agent proposes approaches, evaluates worker reports, updates beliefs, and reallocates effort.
 
 ## Local Assumptions
 
@@ -69,6 +70,74 @@ To run a tiny-budget direct probe through the manual backend:
 python3 scripts/run_direct_probe.py benchmark/problems/basic_lean_02.jsonl
 ```
 
+The abandoned `basic_lean_03` synthetic benchmark branch is intentionally not merged. Low-reasoning direct Codex solved every selected task in one round and one Lean call, so that suite is saturated and not useful for PI-vs-uniform allocation analysis.
+
+## Real Lean Tasks
+
+`real_lean_01` is the replacement direction. It is based on real Lean proof obligations supplied through a generic JSONL adapter, then filtered by direct low-reasoning difficulty.
+
+Generic input rows for `scripts/ingest_real_lean_tasks.py` may contain:
+
+```json
+{
+  "problem_id": "real01_p001",
+  "source": "sorrydb_or_local_project",
+  "imports": ["Mathlib"],
+  "context": "local definitions, namespaces, and setup",
+  "statement": "theorem target ... : ...",
+  "full_lean_source": "optional full file containing {{proof}} or sorry",
+  "proof_placeholder": "{{proof}}",
+  "project_root": "optional Lake project root",
+  "module_path": "optional source module path",
+  "theorem_name": "optional public theorem name",
+  "reference_proof": "optional private validation proof",
+  "metadata": {"public": "metadata only"}
+}
+```
+
+The ingester writes public problems and optional private solutions separately:
+
+```bash
+python3 scripts/ingest_real_lean_tasks.py local_real_tasks.jsonl \
+  --out-problems benchmark/candidates/real_lean_01_candidates.jsonl \
+  --out-solutions benchmark/solutions/real_lean_01_solutions.jsonl
+```
+
+Run the cheapest empirical gate first:
+
+```bash
+CODEX_SUBAGENT_MAX_PARALLEL=1 \
+CODEX_SUBAGENT_TIMEOUT_SECONDS=300 \
+CODEX_SUBAGENT_EXTRA_ARGS="--ignore-user-config --ignore-rules" \
+python3 scripts/probe_tasks.py benchmark/candidates/real_lean_01_candidates.jsonl \
+  --config config/real_lean_01_probe.yaml \
+  --backend codex_subagents \
+  --subagent-reasoning-effort low \
+  --condition direct \
+  --run-id real01_direct_probe_low_01
+```
+
+Then select only tasks that survive hard direct-probe filtering:
+
+```bash
+python3 scripts/select_real_lean_01.py \
+  --candidates benchmark/candidates/real_lean_01_candidates.jsonl \
+  --direct-summary logs/real01_direct_probe_low_01/summary.csv \
+  --out-problems benchmark/problems/real_lean_01.jsonl
+```
+
+The selector fails loudly if fewer than 20 tasks survive, with the message `Candidate pool too easy: only X tasks survived. Import harder real tasks.` Do not override that by silently selecting one-call direct solves.
+
+After selection, run the allocation benchmark:
+
+```bash
+python3 scripts/run_experiment.py benchmark/problems/real_lean_01.jsonl \
+  --config config/real_lean_01_allocation.yaml \
+  --backend codex_subagents \
+  --subagent-reasoning-effort low \
+  --run-id real01_low_01
+```
+
 ## Configuration
 
 The default configuration is in `config/default.yaml`.
@@ -82,6 +151,8 @@ Important budget fields:
 - `max_wall_seconds`
 - `lean_timeout_seconds`
 - `max_estimated_tokens`
+- `uniform_policy`
+- `uniform_seed`
 
 `max_estimated_tokens` is optional. Token estimates are approximate and based on prompt/response text length, which is useful for local Codex-driven runs where exact API billing metadata is unavailable.
 
@@ -100,9 +171,11 @@ logs/<run_id>/
   pending/
   codex_subagents/
   summary.csv
+  aggregate_summary.csv
+  approach_trace.csv
 ```
 
-The event log is append-only JSONL and is the main source for later analysis.
+The event log is append-only JSONL. `approach_trace.csv` is the per-round allocation ledger: it records which approach was tried by direct/uniform/PI workers, worker progress claims, Lean success, proof_found, estimated tokens, and PI belief scores when available.
 
 ## Mathlib Notes
 

@@ -19,20 +19,23 @@ from harness.lean_runner import LeanRunner
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("benchmark_jsonl", type=Path)
-    parser.add_argument("--solutions", type=Path, required=True)
+    parser.add_argument("--solutions", type=Path, default=None)
     parser.add_argument("--lean-timeout-seconds", type=int, default=10)
     args = parser.parse_args()
 
     problems = load_jsonl(args.benchmark_jsonl)
-    solutions = load_solutions_jsonl(args.solutions)
+    solutions = load_solutions_jsonl(args.solutions) if args.solutions else {}
     runner = LeanRunner(["lean"], timeout_seconds=args.lean_timeout_seconds)
 
     failures: list[str] = []
     for problem in problems:
         solution = solutions.get(problem.problem_id)
         if solution is None:
-            failures.append(f"{problem.problem_id}: missing reference proof")
-            print(f"FAIL {problem.problem_id}: missing reference proof")
+            if args.solutions:
+                failures.append(f"{problem.problem_id}: missing reference proof")
+                print(f"FAIL {problem.problem_id}: missing reference proof")
+            else:
+                print(f"SKIP {problem.problem_id}: no reference proof file supplied")
             continue
         result = runner.check(problem, solution.reference_proof)
         if result.success:
@@ -41,10 +44,11 @@ def main() -> None:
             failures.append(f"{problem.problem_id}: {result.error_summary}")
             print(f"FAIL {problem.problem_id}: {result.error_summary}")
 
-    extra_solutions = sorted(set(solutions) - {problem.problem_id for problem in problems})
-    for problem_id in extra_solutions:
-        failures.append(f"{problem_id}: solution has no public problem")
-        print(f"FAIL {problem_id}: solution has no public problem")
+    if args.solutions:
+        extra_solutions = sorted(set(solutions) - {problem.problem_id for problem in problems})
+        for problem_id in extra_solutions:
+            failures.append(f"{problem_id}: solution has no public problem")
+            print(f"FAIL {problem_id}: solution has no public problem")
 
     print(f"checked={len(problems)} failed={len(failures)}")
     if failures:
@@ -53,4 +57,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
