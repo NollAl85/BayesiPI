@@ -23,6 +23,13 @@ def main() -> None:
     parser.add_argument("benchmark_jsonl", type=Path)
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config" / "default.yaml")
     parser.add_argument(
+        "--backend",
+        choices=["deterministic", "manual"],
+        default="manual",
+        help="Agent backend. Use manual for Codex/subagent file exchange.",
+    )
+    parser.add_argument("--run-id", default=None, help="Optional explicit run ID for reproducible log paths.")
+    parser.add_argument(
         "--condition",
         action="append",
         choices=[condition.value for condition in Condition],
@@ -33,7 +40,7 @@ def main() -> None:
     config = load_config(args.config)
     conditions = [Condition(value) for value in args.condition] if args.condition else None
     problems = load_jsonl(args.benchmark_jsonl)
-    runner = ExperimentRunner(config, PROJECT_ROOT)
+    runner = ExperimentRunner(config, PROJECT_ROOT, run_id=args.run_id, backend_name=args.backend)
     rows = runner.run_all(problems, conditions)
     summary_path = runner.logger.run_dir / "summary.csv"
     aggregate_path = write_aggregate_csv(summary_path)
