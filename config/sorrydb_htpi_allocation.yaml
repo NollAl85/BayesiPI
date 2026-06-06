@@ -1,0 +1,36 @@
+run_id_prefix: sorrydb_htpi
+lean_command:
+  - lake
+  - env
+  - lean
+max_rounds: 3
+workers_per_round: 2
+max_llm_calls: 8
+max_lean_calls: 8
+max_wall_seconds: 1200
+lean_timeout_seconds: 60
+max_estimated_tokens: null
+uniform_policy: round_robin
+uniform_seed: 3
+conditions:
+  - direct
+  - uniform
+  - pi_initial_only
+  - pi
+approaches:
+  - approach_id: unfold_definitions
+    description: Unfold relevant HTPI definitions such as onto, range, Univ, image, one_to_one, equinum, ctble, denum, powerset, and val_image selectively.
+  - approach_id: set_extensionality
+    description: Use set extensionality, subset reasoning, membership expansion, and constructor splitting for Set-valued goals.
+  - approach_id: function_inverse_bijection
+    description: Reason through inverse functions, compositions, identity functions, one-to-one/onto/equinumerosity witnesses, and congrFun.
+  - approach_id: cardinality_countability
+    description: Use HTPI cardinality/countability notions such as equinum, denum, ctble, range, and known closure lemmas.
+  - approach_id: subtype_val_image
+    description: Work with Subtype equality, coercions, val_image, powersets, and witnesses involving elements of Set A.
+  - approach_id: constructive_witness
+    description: Build explicit witnesses for Exists/equinumerosity/countability statements and prove their required properties.
+  - approach_id: rewriting_simp
+    description: Use rw, simp, ext, calc, congrFun, function extensionality, and local hypotheses to normalize goals.
+  - approach_id: auxiliary_lemma
+    description: Propose a small local helper lemma that isolates the main definitional or set-theoretic obstacle.

@@ -138,6 +138,43 @@ python3 scripts/run_experiment.py benchmark/problems/real_lean_01.jsonl \
   --run-id real01_low_01
 ```
 
+## HTPI/SorryDB Pilot
+
+The first real-task pilot uses HTPI/SorryDB-style proof obligations from `benchmark/problems/sorrydb_htpi_10_pilot.jsonl`.
+These are real Lean `sorry` tasks reconstructed from HTPI rows in the SorryDB evaluation split, with local Lean checking through the pinned HTPI Lake project.
+
+The direct-low gate used a deliberately harsh one-shot budget:
+
+- `max_rounds: 1`
+- `max_llm_calls: 1`
+- `max_lean_calls: 1`
+
+That probe solved 4/10 tasks and failed 6/10 tasks. This is useful for a pilot because the set is not saturated by direct-low, while still leaving some tasks reachable enough to test allocation behavior. The six direct-low failures are stored separately in `benchmark/problems/sorrydb_htpi_direct_failed_6.jsonl`.
+
+Run the full pilot with:
+
+```bash
+bash scripts/run_sorrydb_htpi_pilot.sh
+```
+
+The script runs:
+
+- `direct`
+- `uniform`
+- `pi_initial_only`
+- `pi`
+
+using `config/sorrydb_htpi_allocation.yaml`, low Codex reasoning, two parallel subagents, and the HTPI `lake env lean` checker. It then writes pilot analysis under `logs/sorrydb_htpi_all_low_01/pilot_analysis/`.
+
+Interpret the outputs in two slices:
+
+- all 10 tasks, for broad cost and success-rate context
+- the 6 direct-low failures, which are the primary signal-bearing comparison
+
+The primary scientific question is whether PI-guided allocation solves more direct-failed tasks than uniform allocation, or matches uniform success with fewer Lean calls, LLM calls, or estimated tokens. A strong-looking all-task score is not sufficient by itself; the direct-failed subset is the main comparison.
+
+This is not yet a final benchmark. It is a pilot to test whether PI-style progress assessment improves allocation on real Lean obligations before expanding the problem set.
+
 ## Configuration
 
 The default configuration is in `config/default.yaml`.
