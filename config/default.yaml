@@ -1,0 +1,24 @@
+run_id_prefix: smoke
+lean_command:
+  - lean
+max_rounds: 3
+workers_per_round: 3
+max_llm_calls: 30
+max_lean_calls: 30
+max_wall_seconds: 120
+lean_timeout_seconds: 10
+max_estimated_tokens: null
+conditions:
+  - direct
+  - uniform
+  - pi
+approaches:
+  - approach_id: simplification
+    description: Try to close the theorem by simplification, rewriting, or canonical simp lemmas.
+  - approach_id: library_search
+    description: Try to identify a direct theorem or constructor already available in the imported environment.
+  - approach_id: case_analysis
+    description: Try direct case analysis, constructors, or destructuring hypotheses.
+  - approach_id: induction
+    description: Try an induction route when the theorem has recursive data.
+

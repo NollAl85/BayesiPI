@@ -1,0 +1,7 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+logs/*
+!logs/.gitkeep
+benchmark/mathlib_sample.jsonl
+
