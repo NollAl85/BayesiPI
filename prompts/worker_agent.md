@@ -25,3 +25,6 @@ Allowed progress claims:
 - `no_progress`
 - `evidence_against`
 
+Useful focused approaches include induction, cases, rewriting/simp, local theorem search, and constructive witness extraction.
+
+Report structural progress separately from technical cleanup. Do not inspect benchmark solution files or hidden reference proofs.

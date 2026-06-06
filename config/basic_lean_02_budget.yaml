@@ -1,0 +1,21 @@
+run_id_prefix: basic02
+lean_command:
+  - lean
+max_rounds: 1
+workers_per_round: 3
+max_llm_calls: 4
+max_lean_calls: 3
+max_wall_seconds: 300
+lean_timeout_seconds: 10
+max_estimated_tokens: null
+conditions:
+  - direct
+  - uniform
+  - pi
+approaches:
+  - approach_id: induction
+    description: Try induction over Nat or List and use the induction hypothesis to simplify recursive definitions.
+  - approach_id: cases
+    description: Try case analysis, constructors, and witness extraction for Or, Option, Bool, Exists, and Forall structure.
+  - approach_id: rewriting_simp
+    description: Try local rewriting, simp, associativity/commutativity cleanup, and chained equalities.

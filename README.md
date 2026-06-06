@@ -38,6 +38,20 @@ python3 scripts/run_experiment.py benchmark/problems/basic_lean_01.jsonl --backe
 
 Each agent call writes a prompt to `logs/<run_id>/pending/<call_id>_prompt.md` and waits for `logs/<run_id>/pending/<call_id>_response.json`. Open the prompt, send it to Codex or a subagent, save the JSON response file, and the experiment will continue.
 
+## Benchmark Validation
+
+`basic_lean_02` keeps public problems and private reference proofs separate:
+
+```bash
+python3 scripts/validate_benchmark.py benchmark/problems/basic_lean_02.jsonl --solutions benchmark/solutions/basic_lean_02_solutions.jsonl
+```
+
+To run a tiny-budget direct probe through the manual backend:
+
+```bash
+python3 scripts/run_direct_probe.py benchmark/problems/basic_lean_02.jsonl
+```
+
 ## Configuration
 
 The default configuration is in `config/default.yaml`.

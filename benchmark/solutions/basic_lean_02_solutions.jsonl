@@ -1,0 +1,15 @@
+{"problem_id":"basic02_custom_len_append","reference_proof":"by\n  induction xs with\n  | nil => simp [b2_len]\n  | cons x xs ih =>\n      simp [b2_len, ih]\n      rw [Nat.add_assoc]\n      rw [Nat.add_comm (b2_len ys) 1]\n      rw [← Nat.add_assoc]"}
+{"problem_id":"basic02_custom_map_append","reference_proof":"by\n  induction xs with\n  | nil => rfl\n  | cons x xs ih =>\n      simp [b2_map, List.append, ih]"}
+{"problem_id":"basic02_custom_sum_append","reference_proof":"by\n  induction xs with\n  | nil => simp [b2_sum]\n  | cons x xs ih =>\n      simp [b2_sum, List.append, ih, Nat.add_assoc]"}
+{"problem_id":"basic02_custom_double","reference_proof":"by\n  induction n with\n  | zero => rfl\n  | succ n ih =>\n      simp [b2_double, ih, Nat.succ_eq_add_one, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm]"}
+{"problem_id":"basic02_custom_add","reference_proof":"by\n  induction n with\n  | zero => simp [b2_add]\n  | succ n ih =>\n      simp [b2_add, ih, Nat.succ_eq_add_one, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm]"}
+{"problem_id":"basic02_nested_or_repack","reference_proof":"by\n  intro h\n  cases h with\n  | inl hpqr =>\n      cases hpqr with\n      | inl hp => exact Or.inr (Or.inr hp)\n      | inr hqr =>\n          cases hqr with\n          | inl hq => exact Or.inr (Or.inl hq)\n          | inr hr => exact Or.inl (Or.inr hr)\n  | inr hs => exact Or.inl (Or.inl hs)"}
+{"problem_id":"basic02_option_elim","reference_proof":"by\n  cases o with\n  | none => exact Or.inl rfl\n  | some x => exact Or.inr (Exists.intro x rfl)"}
+{"problem_id":"basic02_bool_and_split","reference_proof":"by\n  intro h\n  cases a <;> cases b <;> simp at h ⊢"}
+{"problem_id":"basic02_exists_to_forall_exists","reference_proof":"by\n  intro h y\n  cases h with\n  | intro x hx =>\n      exact Exists.intro x (hx y)"}
+{"problem_id":"basic02_forall_split","reference_proof":"by\n  intro h\n  constructor\n  · intro x\n    exact (h x).left\n  · intro x\n    exact (h x).right"}
+{"problem_id":"basic02_eq_chain_function","reference_proof":"by\n  intro hab hbc hcd\n  rw [hab]\n  rw [hbc]\n  rw [hcd]"}
+{"problem_id":"basic02_mem_append_left","reference_proof":"by\n  intro h\n  induction xs with\n  | nil => cases h\n  | cons y xs ih =>\n      cases h with\n      | head => simp\n      | tail _ htail =>\n          simpa using Or.inr (by simpa using ih htail)"}
+{"problem_id":"basic02_bool_if_split","reference_proof":"by\n  intro h\n  cases a <;> cases b <;> simp at h ⊢"}
+{"problem_id":"basic02_custom_all_append","reference_proof":"by\n  induction xs with\n  | nil => simp [b2_all]\n  | cons x xs ih =>\n      simp [b2_all, ih]\n      rw [Bool.and_assoc]"}
+{"problem_id":"basic02_custom_any_append","reference_proof":"by\n  induction xs with\n  | nil => simp [b2_any]\n  | cons x xs ih =>\n      simp [b2_any, ih]\n      rw [Bool.or_assoc]"}

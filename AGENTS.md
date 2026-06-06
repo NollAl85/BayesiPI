@@ -89,6 +89,9 @@ Examples of approaches:
 - Keep Mathlib extraction lightweight.
 - Log all prompts, responses, Lean outputs, PI updates, worker reports, and budget counters.
 - Never expose `hidden_reference_proof` to agents.
+- Public benchmark files live under `benchmark/problems/`.
+- Reference proofs live under `benchmark/solutions/` and are validation-only. Agents must not inspect or use these files during experiment runs.
+- Agents should work only from generated prompt files, Lean feedback, local imports, and their assigned role.
 
 ## Budget Discipline
 
@@ -102,3 +105,15 @@ All conditions must use comparable budgets:
 
 PI calls count against the same agent-call and estimated-token budgets as worker and direct-agent calls.
 
+## Medium-Basic Benchmarks
+
+`basic_lean_02` is intended to create real retries and allocation decisions. Agents should expect:
+
+- induction over `Nat` and `List`,
+- custom recursive definitions,
+- nested case analysis,
+- multi-step rewriting,
+- quantifier and witness manipulation,
+- Boolean and Option case splits.
+
+The PI should distinguish structural progress, such as the right induction variable or case split, from technical progress, such as fixing a rewrite orientation or syntax error.
