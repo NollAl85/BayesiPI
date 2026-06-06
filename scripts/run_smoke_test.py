@@ -17,8 +17,18 @@ from harness.experiment_runner import ExperimentRunner, load_config
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--backend",
+        choices=["deterministic", "manual"],
+        default="deterministic",
+        help="Agent backend. Smoke tests default to deterministic.",
+    )
+    args = parser.parse_args()
     config = load_config(PROJECT_ROOT / "config" / "default.yaml")
-    runner = ExperimentRunner(config, PROJECT_ROOT)
+    runner = ExperimentRunner(config, PROJECT_ROOT, backend_name=args.backend)
     rows = runner.run_all(toy_problems())
     summary_path = runner.logger.run_dir / "summary.csv"
     aggregate_path = write_aggregate_csv(summary_path)

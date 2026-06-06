@@ -25,10 +25,12 @@ class RunLogger:
         self.prompts_dir = self.run_dir / "prompts"
         self.responses_dir = self.run_dir / "responses"
         self.lean_dir = self.run_dir / "lean"
+        self.pending_dir = self.run_dir / "pending"
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.prompts_dir.mkdir(exist_ok=True)
         self.responses_dir.mkdir(exist_ok=True)
         self.lean_dir.mkdir(exist_ok=True)
+        self.pending_dir.mkdir(exist_ok=True)
         self._event_index = 0
         self._artifact_index = 0
 
@@ -112,4 +114,3 @@ class RunLogger:
 def _safe_name(value: str) -> str:
     cleaned = [char if char.isalnum() or char in ("-", "_") else "_" for char in value]
     return "".join(cleaned).strip("_")[:80] or "artifact"
-

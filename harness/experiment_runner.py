@@ -6,7 +6,14 @@ from typing import Iterable
 
 import yaml
 
-from harness.agents import DeterministicToyBackend, DirectAgent, PIAgent, PromptLibrary, WorkerAgent
+from harness.agents import (
+    DeterministicToyBackend,
+    DirectAgent,
+    FileExchangeBackend,
+    PIAgent,
+    PromptLibrary,
+    WorkerAgent,
+)
 from harness.lean_runner import LeanRunner
 from harness.logging import RunLogger, make_run_id
 from harness.schemas import (
@@ -110,6 +117,7 @@ class ExperimentRunner:
         config: ExperimentConfig,
         project_root: Path | str | None = None,
         run_id: str | None = None,
+        backend_name: str = "deterministic",
     ):
         self.config = config
         self.project_root = Path(project_root) if project_root else Path(__file__).resolve().parents[1]
@@ -117,7 +125,7 @@ class ExperimentRunner:
         self.logger = RunLogger(self.project_root / "logs", self.run_id)
         self.lean_runner = LeanRunner(config.lean_command, config.lean_timeout_seconds)
         prompt_library = PromptLibrary(self.project_root / "prompts")
-        backend = DeterministicToyBackend()
+        backend = self._build_backend(backend_name)
         self.direct_agent = DirectAgent(backend, prompt_library)
         self.worker_agent = WorkerAgent(backend, prompt_library)
         self.pi_agent = PIAgent(backend, prompt_library)
@@ -282,6 +290,13 @@ class ExperimentRunner:
     def _approaches(self) -> list[Approach]:
         return self.config.approaches or DEFAULT_APPROACHES
 
+    def _build_backend(self, backend_name: str):
+        if backend_name == "deterministic":
+            return DeterministicToyBackend()
+        if backend_name == "manual":
+            return FileExchangeBackend(self.logger.pending_dir)
+        raise ValueError(f"Unknown backend: {backend_name}")
+
     def _fallback_assignments(self, approaches: list[Approach]):
         from harness.schemas import PIAssignment
 
@@ -339,4 +354,3 @@ def load_config(path: Path | str) -> ExperimentConfig:
     with Path(path).open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
     return ExperimentConfig.model_validate(payload)
-

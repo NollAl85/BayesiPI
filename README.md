@@ -30,6 +30,14 @@ python3 scripts/run_smoke_test.py
 
 This runs all three conditions on trivial Lean examples, writes logs under `logs/<run_id>/`, and emits a `summary.csv`.
 
+For a manual Codex/subagent-backed run:
+
+```bash
+python3 scripts/run_experiment.py benchmark/problems/basic_lean_01.jsonl --backend manual --run-id basic_manual_01
+```
+
+Each agent call writes a prompt to `logs/<run_id>/pending/<call_id>_prompt.md` and waits for `logs/<run_id>/pending/<call_id>_response.json`. Open the prompt, send it to Codex or a subagent, save the JSON response file, and the experiment will continue.
+
 ## Configuration
 
 The default configuration is in `config/default.yaml`.
@@ -68,4 +76,3 @@ The event log is append-only JSONL and is the main source for later analysis.
 Toy problems can run with plain `lean`. Mathlib reconstruction should use a Lake project with a pinned Lean toolchain and compatible Mathlib revision. Avoid using Mathlib `master` blindly for reproducibility.
 
 The official Mathlib workflow recommends using cached build artifacts with `lake exe cache get`; without those cached artifacts, building Mathlib locally can be very slow.
-
