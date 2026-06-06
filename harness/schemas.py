@@ -42,6 +42,11 @@ class Problem(BaseModel):
         }
 
 
+class ReferenceSolution(BaseModel):
+    problem_id: str
+    reference_proof: str
+
+
 class Approach(BaseModel):
     approach_id: str
     description: str
@@ -153,4 +158,3 @@ class ConditionResult(BaseModel):
 
 def model_to_jsonable(model: BaseModel) -> dict[str, Any]:
     return model.model_dump(mode="json")
-

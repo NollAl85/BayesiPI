@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from harness.schemas import Problem, model_to_jsonable
+from harness.schemas import Problem, ReferenceSolution, model_to_jsonable
 
 
 def load_jsonl(path: Path | str) -> list[Problem]:
@@ -26,3 +26,18 @@ def write_jsonl(path: Path | str, problems: list[Problem]) -> None:
         for problem in problems:
             handle.write(json.dumps(model_to_jsonable(problem), sort_keys=True) + "\n")
 
+
+def load_solutions_jsonl(path: Path | str) -> dict[str, ReferenceSolution]:
+    solutions: dict[str, ReferenceSolution] = {}
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                solution = ReferenceSolution.model_validate_json(line)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f"Invalid solution JSONL at line {line_number}: {exc}") from exc
+            if solution.problem_id in solutions:
+                raise ValueError(f"Duplicate solution for problem_id={solution.problem_id!r}")
+            solutions[solution.problem_id] = solution
+    return solutions
