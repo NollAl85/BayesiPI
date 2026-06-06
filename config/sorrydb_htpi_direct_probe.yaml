@@ -1,0 +1,19 @@
+run_id_prefix: sorrydb_htpi_direct_probe
+lean_command:
+  - lake
+  - env
+  - lean
+max_rounds: 1
+workers_per_round: 1
+max_llm_calls: 1
+max_lean_calls: 1
+max_wall_seconds: 300
+lean_timeout_seconds: 60
+max_estimated_tokens: null
+uniform_policy: first_k
+uniform_seed: 0
+conditions:
+  - direct
+approaches:
+  - approach_id: direct_probe
+    description: One-shot direct proof reconstruction probe.
