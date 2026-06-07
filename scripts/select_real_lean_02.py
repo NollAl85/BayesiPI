@@ -20,7 +20,9 @@ from benchmark.mathlib_adapter import meaningful_proof_lines
 from harness.schemas import Problem, ReferenceSolution, model_to_jsonable
 
 
-TRIVIAL_PROOF_RE = re.compile(r"^\s*by\s+(?:exact|simpa|simp|rfl|omega)\b|^\s*(?:exact|simpa|simp|rfl|omega)\b")
+TRIVIAL_PROOF_RE = re.compile(
+    r"^\s*by\s+(?:exact|simpa|simp|rfl|omega|aesop)\b|^\s*(?:exact|simpa|simp|rfl|omega|aesop)\b"
+)
 PUBLIC_NAME_RE = re.compile(r"^real02_target_\d{3,}$")
 PRIVATE_METADATA_KEYS = {"original_theorem_name", "source_module", "source_path"}
 REFERENCE_LEAK_KEYS = {"hidden_reference_proof", "reference_proof"}
@@ -78,7 +80,7 @@ def main() -> None:
     )
     parser.add_argument("--target-size", type=int, default=20)
     parser.add_argument("--min-survivors", type=int, default=20)
-    parser.add_argument("--min-reference-proof-lines", type=int, default=8)
+    parser.add_argument("--min-reference-proof-lines", type=int, default=10)
     parser.add_argument("--max-reference-check-seconds", type=float, default=90.0)
     args = parser.parse_args()
 
@@ -149,19 +151,27 @@ def _hard_reject_reason(
         return "direct_full_solved"
     if _solved(uniform) and _int_field(uniform, "rounds", 0) <= 1:
         return "uniform_constrained_one_round_solved"
-    if direct_one_shot and _solved(direct_one_shot) and _int_field(direct_one_shot, "lean_calls", 0) <= 1:
-        return "direct_one_shot_one_lean_call_solved"
+    if direct_one_shot and _solved(direct_one_shot):
+        return "direct_one_shot_solved"
     if _probe_setup_failed(direct_full) or _probe_setup_failed(uniform) or (
         direct_one_shot is not None and _probe_setup_failed(direct_one_shot)
     ):
         return "lean_setup_failed"
-    if _candidate_known_unchecked(problem):
+    if _candidate_known_unchecked(problem, solution):
         return "candidate_not_locally_checked"
     if _public_payload_leaks_private_source(problem):
         return "public_payload_leaks_private_source"
     if _theorem_too_short_or_syntactic(problem):
         return "theorem_too_short_or_syntactic"
     if solution is not None:
+        if solution.metadata.get("candidate_validated") is False and solution.metadata.get("validation_attempted"):
+            return "candidate_validation_failed"
+        if solution.metadata.get("reference_compiles") is False and solution.metadata.get("validation_attempted"):
+            return "reference_validation_failed"
+        if solution.metadata.get("original_theorem_available"):
+            return "original_theorem_available"
+        if solution.metadata.get("proof_trivially_available"):
+            return "proof_trivially_available"
         proof = solution.reference_proof
         if meaningful_proof_lines(proof) < min_reference_proof_lines:
             return "short_reference_proof"
@@ -197,7 +207,14 @@ def _metadata_contains_private_path(metadata: dict) -> bool:
     return any(marker in lowered for marker in path_markers)
 
 
-def _candidate_known_unchecked(problem: Problem) -> bool:
+def _candidate_known_unchecked(problem: Problem, solution: ReferenceSolution | None) -> bool:
+    if problem.source == "real_lean_02_mathlib":
+        if solution is None:
+            return True
+        if solution.metadata.get("validation_attempted") is not True:
+            return True
+        if solution.metadata.get("candidate_validated") is not True:
+            return True
     if problem.metadata.get("lean_setup_failed"):
         return True
     if problem.metadata.get("validation_attempted") and not problem.metadata.get("candidate_validated"):

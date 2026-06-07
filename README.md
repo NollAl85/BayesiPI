@@ -175,20 +175,32 @@ Generate candidates from the selected local source:
 ```bash
 python3 scripts/generate_real_lean_02_candidates.py \
   --source-discovery logs/source_discovery.json \
-  --limit 50 \
+  --limit 300 \
   --out-candidates benchmark/candidates/real_lean_02_candidates.jsonl \
   --out-solutions benchmark/solutions/real_lean_02_solutions.jsonl
 ```
 
-If a usable Mathlib source is found, generation uses the Mathlib reconstruction sampler. Otherwise, it extracts file-with-hole tasks from local `sorry` declarations. Public problems use anonymized theorem names like `real02_target_001` and no source module path. Original theorem names, source paths, and reference proofs are never exposed to agents; local `sorry` tasks write no reference solution unless one genuinely exists.
+If a usable Mathlib source is found, generation uses prefix-isolated reconstruction: it copies the original file imports and source prefix before the target declaration, replaces only the target proof with `{{proof}}`, and does not import the module containing the target theorem or broad `Mathlib`. When local `lake env lean` works, Mathlib candidates are checked with the private reference proof and rejected if the original theorem name or a trivial `aesop` proof closes the generated file. Otherwise, generation extracts file-with-hole tasks from local `sorry` declarations.
+
+Public problems use anonymized theorem names like `real02_target_001` and no source module path. Original target theorem names, source paths, validation results, and reference proofs stay in the private solutions file; local `sorry` tasks write no reference solution unless one genuinely exists.
 
 The older Mathlib-only sampler is still available when you explicitly want it:
 
 ```bash
 python3 scripts/sample_mathlib_real_lean_02.py /path/to/mathlib-or-lake-project \
   --limit 100 \
+  --validate-candidates \
   --out-candidates benchmark/candidates/real_lean_02_candidates.jsonl \
   --out-solutions benchmark/solutions/real_lean_02_solutions.jsonl
+```
+
+Audit the generated candidates for leakage before running expensive probes:
+
+```bash
+python3 scripts/audit_real_lean_02_candidates.py \
+  --candidates benchmark/candidates/real_lean_02_candidates.jsonl \
+  --solutions benchmark/solutions/real_lean_02_solutions.jsonl \
+  --out logs/real_lean_02_leak_audit.csv
 ```
 
 For local setup guidance without running any install:
@@ -224,7 +236,7 @@ python3 scripts/select_real_lean_02.py \
   --out-problems benchmark/problems/real_lean_02.jsonl
 ```
 
-The selector hard-rejects candidates solved by `direct_full`, candidates solved by `uniform_constrained` in one round, direct one-shot solves with one Lean call when that probe is supplied, short or trivial reference proofs when a reference exists, candidates with local setup failures, public payloads that leak private source information, and theorem statements that are too short or syntactic. If fewer than 20 candidates survive, it fails with:
+The selector hard-rejects candidates solved by `direct_full`, candidates solved by `uniform_constrained` in one round, any direct one-shot solve when that probe is supplied, candidates where the original theorem is available in the generated environment, candidates with trivial reference proofs, reference proofs under 10 meaningful lines, candidates with failed or missing Mathlib validation, candidates with local setup failures, public payloads that leak private source information, and theorem statements that are too short or syntactic. If fewer than 20 candidates survive, it fails with:
 
 ```text
 Candidate pool too easy or too small: only X survived.

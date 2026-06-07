@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 import random
 import re
+import time
 from pathlib import Path
 from typing import Callable
 
 from benchmark.benchmark import load_jsonl, write_jsonl
+from harness.lean_runner import LeanRunner
 from harness.schemas import Problem, ReferenceSolution
 
 
@@ -50,6 +52,9 @@ class ExtractedTheorem:
     full_lean_source: str
     reference_proof: str
     statement: str
+    import_lines: list[str]
+    prefix_line_count: int
+    source_char_count: int
 
 
 @dataclass
@@ -81,6 +86,9 @@ def sample_from_local_mathlib(
     project_root: Path | str | None = None,
     public_import: str = "Mathlib",
     source: str = "real_lean_02_mathlib",
+    validate_candidates: bool = False,
+    lean_command: list[str] | None = None,
+    lean_timeout_seconds: int = 90,
 ) -> list[Problem]:
     problems, _ = sample_from_local_mathlib_with_solutions(
         mathlib_root=mathlib_root,
@@ -90,6 +98,9 @@ def sample_from_local_mathlib(
         project_root=project_root,
         public_import=public_import,
         source=source,
+        validate_candidates=validate_candidates,
+        lean_command=lean_command,
+        lean_timeout_seconds=lean_timeout_seconds,
     )
     return problems
 
@@ -103,6 +114,11 @@ def sample_from_local_mathlib_with_solutions(
     project_root: Path | str | None = None,
     public_import: str = "Mathlib",
     source: str = "real_lean_02_mathlib",
+    validate_candidates: bool = False,
+    lean_command: list[str] | None = None,
+    lean_timeout_seconds: int = 90,
+    max_prefix_lines: int = 800,
+    max_source_chars: int = 120_000,
 ) -> tuple[list[Problem], list[ReferenceSolution]]:
     mathlib_dir = _resolve_mathlib_dir(Path(mathlib_root))
     lake_root = Path(project_root) if project_root else _infer_project_root(mathlib_dir)
@@ -113,6 +129,7 @@ def sample_from_local_mathlib_with_solutions(
     problems: list[Problem] = []
     solutions: list[ReferenceSolution] = []
     next_index = 1
+    runner = LeanRunner(command=lean_command or ["lake", "env", "lean"], timeout_seconds=lean_timeout_seconds)
     for path in modules:
         if len(problems) >= limit:
             break
@@ -120,7 +137,8 @@ def sample_from_local_mathlib_with_solutions(
             path=path,
             mathlib_dir=mathlib_dir,
             public_index_start=next_index,
-            public_import=public_import,
+            max_prefix_lines=max_prefix_lines,
+            max_source_chars=max_source_chars,
         ):
             problem_id = f"real_lean_02_{next_index:03d}"
             problem = Problem(
@@ -137,11 +155,33 @@ def sample_from_local_mathlib_with_solutions(
                 module_path=None,
                 expected_theorem_name=extracted.public_name,
                 metadata={
-                    "source_order": "mathlib_theorem_reconstruction",
-                    "public_import": public_import,
+                    "source_order": "mathlib_prefix_reconstruction",
                     "anonymized": True,
+                    "source_kind": "mathlib",
+                    "prefix_isolated": True,
+                    "public_import_count": len(extracted.import_lines),
+                    "prefix_line_count": extracted.prefix_line_count,
+                    "source_char_count": extracted.source_char_count,
                 },
             )
+            validation_metadata: dict[str, object] = {
+                "validation_attempted": bool(validate_candidates),
+                "candidate_validated": False,
+                "original_theorem_available": None,
+                "proof_trivially_available": None,
+                "reference_compiles": None,
+                "reference_check_seconds": 0.0,
+                "validation_error_summary": "",
+            }
+            if validate_candidates:
+                validation_metadata = _validate_candidate(
+                    runner=runner,
+                    problem=problem,
+                    reference_proof=extracted.reference_proof,
+                    original_name=extracted.original_name,
+                )
+                if not validation_metadata["candidate_validated"]:
+                    continue
             solution = ReferenceSolution(
                 problem_id=problem_id,
                 reference_proof=extracted.reference_proof,
@@ -151,6 +191,10 @@ def sample_from_local_mathlib_with_solutions(
                     "source_path": extracted.source_path,
                     "source_start_line": extracted.start_line,
                     "reference_meaningful_lines": meaningful_proof_lines(extracted.reference_proof),
+                    "import_count": len(extracted.import_lines),
+                    "prefix_line_count": extracted.prefix_line_count,
+                    "source_char_count": extracted.source_char_count,
+                    **validation_metadata,
                 },
             )
             problems.append(problem)
@@ -222,10 +266,14 @@ def _extract_theorems_from_file(
     path: Path,
     mathlib_dir: Path,
     public_index_start: int,
-    public_import: str,
+    max_prefix_lines: int,
+    max_source_chars: int,
 ) -> list[ExtractedTheorem]:
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
+    import_lines = _import_lines(lines)
+    if _imports_all_mathlib(import_lines):
+        return []
     source_module = "Mathlib/" + path.relative_to(mathlib_dir).with_suffix("").as_posix()
     extracted: list[ExtractedTheorem] = []
     public_index = public_index_start
@@ -248,12 +296,18 @@ def _extract_theorems_from_file(
         anonymized_decl = _anonymize_declaration(block, public_name)
         if original_name in anonymized_decl:
             continue
-        context = _public_context(lines[:index])
+        context = _prefix_context(lines[:index])
+        if len(context) > max_prefix_lines:
+            continue
         full_source = _render_full_source(
+            imports=import_lines,
             context=context,
             declaration_with_hole=_with_hole(anonymized_decl),
-            public_import=public_import,
         )
+        if len(full_source) > max_source_chars:
+            continue
+        if original_name in full_source:
+            continue
         statement = _statement_from_declaration(_with_hole(anonymized_decl))
         extracted.append(
             ExtractedTheorem(
@@ -266,6 +320,9 @@ def _extract_theorems_from_file(
                 full_lean_source=full_source,
                 reference_proof=reference_proof,
                 statement=statement,
+                import_lines=import_lines,
+                prefix_line_count=len(context),
+                source_char_count=len(full_source),
             )
         )
         public_index += 1
@@ -340,6 +397,33 @@ def _proof_assignment_match(block: str) -> re.Match[str]:
     return match
 
 
+def _import_lines(lines: list[str]) -> list[str]:
+    imports: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        if stripped.startswith("import "):
+            if stripped not in imports:
+                imports.append(stripped)
+            continue
+        if imports and not stripped.startswith("import "):
+            break
+    return imports
+
+
+def _imports_all_mathlib(imports: list[str]) -> bool:
+    return any(line.strip() == "import Mathlib" for line in imports)
+
+
+def _prefix_context(prefix_lines: list[str]) -> list[str]:
+    context = [line.rstrip() for line in prefix_lines if not line.strip().startswith("import ")]
+    first = 0
+    while first < len(context) and not context[first].strip():
+        first += 1
+    return context[first:]
+
+
 def _public_context(prefix_lines: list[str]) -> list[str]:
     root_entries: list[_ContextEntry] = []
     scope_stack: list[_ContextScope] = []
@@ -385,10 +469,75 @@ def _has_unsupported_command_modifier(prefix_lines: list[str]) -> bool:
     return False
 
 
-def _render_full_source(*, context: list[str], declaration_with_hole: str, public_import: str) -> str:
+def _render_full_source(*, imports: list[str], context: list[str], declaration_with_hole: str) -> str:
     ending = _context_closing_lines(context)
-    parts = [f"import {public_import}", *context, "", declaration_with_hole, *ending]
+    parts = [*imports, *context, "", declaration_with_hole, *ending]
     return "\n".join(parts).strip() + "\n"
+
+
+def _validate_candidate(
+    *,
+    runner: LeanRunner,
+    problem: Problem,
+    reference_proof: str,
+    original_name: str,
+) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "validation_attempted": True,
+        "candidate_validated": False,
+        "original_theorem_available": False,
+        "proof_trivially_available": False,
+        "reference_compiles": False,
+        "reference_check_seconds": 0.0,
+        "validation_error_summary": "",
+    }
+
+    sorry_result = runner.check(problem, "by\n  sorry")
+    if sorry_result.success:
+        metadata["validation_error_summary"] = "lean_runner_accepted_sorry"
+        return metadata
+    if _looks_like_setup_failure(sorry_result.error_summary):
+        metadata["validation_error_summary"] = sorry_result.error_summary
+        return metadata
+
+    start = time.monotonic()
+    reference_result = runner.check(problem, reference_proof)
+    metadata["reference_check_seconds"] = reference_result.elapsed_seconds or (time.monotonic() - start)
+    metadata["reference_compiles"] = reference_result.success
+    if not reference_result.success:
+        metadata["validation_error_summary"] = reference_result.error_summary
+        return metadata
+
+    for reason, proof in (
+        ("original_theorem_available", f"by\n  simpa using {original_name}"),
+        ("original_theorem_available", f"by\n  exact {original_name}"),
+        ("proof_trivially_available", "by\n  aesop"),
+    ):
+        result = runner.check(problem, proof)
+        if result.success:
+            metadata[reason] = True
+            metadata["validation_error_summary"] = reason
+            return metadata
+        if _looks_like_setup_failure(result.error_summary):
+            metadata["validation_error_summary"] = result.error_summary
+            return metadata
+
+    metadata["candidate_validated"] = True
+    return metadata
+
+
+def _looks_like_setup_failure(error_summary: str) -> bool:
+    lowered = error_summary.lower()
+    markers = (
+        "unknown package",
+        "unknown module",
+        "object file",
+        "no such file",
+        "failed to load",
+        "invalid import",
+        "permission denied",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 def _append_context_entry(
@@ -484,10 +633,31 @@ def _drop_earliest_matching(
 
 
 def _context_closing_lines(context: list[str]) -> list[str]:
-    endings: list[str] = []
+    stack: list[tuple[str, str | None]] = []
     for line in context:
-        if line.startswith("namespace "):
-            endings.append(f"end {line.removeprefix('namespace ').strip()}")
-        elif line in {"section", "noncomputable section"}:
+        stripped = line.strip()
+        if stripped.startswith("namespace "):
+            stack.append(("namespace", stripped.removeprefix("namespace ").strip()))
+            continue
+        if stripped in {"section", "noncomputable section"} or stripped.startswith("section "):
+            stack.append(("section", None))
+            continue
+        if stripped == "end" or stripped.startswith("end "):
+            ended_name = stripped.removeprefix("end").strip()
+            if not stack:
+                continue
+            if ended_name:
+                for index in range(len(stack) - 1, -1, -1):
+                    kind, name = stack[index]
+                    if kind == "namespace" and name == ended_name:
+                        del stack[index:]
+                        break
+                continue
+            stack.pop()
+    endings: list[str] = []
+    for kind, name in reversed(stack):
+        if kind == "namespace" and name:
+            endings.append(f"end {name}")
+        else:
             endings.append("end")
-    return list(reversed(endings))
+    return endings

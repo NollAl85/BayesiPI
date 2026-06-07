@@ -20,8 +20,10 @@ from harness.schemas import Problem, ReferenceSolution, model_to_jsonable
 
 
 NO_SOURCES_MESSAGE = (
-    "No local real Lean sources found. Provide MATHLIB_ROOT, HTPI_ROOT, "
-    "or a local Lake project containing Lean files with sorry."
+    "No usable local real Lean sources found.\n"
+    "Set MATHLIB_ROOT or MATHLIB_PROJECT_ROOT to a local Lake/Mathlib checkout that can run `lake env lean`, "
+    "or set HTPI_ROOT / REAL_LEAN_SOURCE_ROOTS / SORRYDB_SOURCE_ROOTS to a local Lake project containing real sorry tasks.\n"
+    "This script does not clone repositories or fall back to synthetic tasks."
 )
 
 
@@ -29,7 +31,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate real_lean_02 candidates from local real Lean sources.")
     parser.add_argument("--source-discovery", type=Path, required=True)
     parser.add_argument("--source-id", default=None)
-    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--limit", type=int, default=300)
     parser.add_argument("--seed", type=int, default=2)
     parser.add_argument(
         "--out-candidates",
@@ -81,7 +83,12 @@ def _select_source(sources: list[dict[str, Any]], source_id: str | None) -> dict
                 return row if _usable_source(row) else None
         return None
     for row in candidates:
-        if row.get("kind") == "mathlib" and row.get("mathlib_root") and _path_exists(row["mathlib_root"]):
+        if (
+            row.get("kind") == "mathlib"
+            and row.get("mathlib_root")
+            and _path_exists(row["mathlib_root"])
+            and row.get("mathlib_prefix_reconstruction_possible", row.get("can_run_lake_env_lean"))
+        ):
             return row
     for row in candidates:
         if row.get("kind") in {"sorry_project", "lake_project"} and int(row.get("sorry_count") or 0) > 0:
@@ -101,6 +108,8 @@ def _generate_from_source(
             limit=limit,
             seed=seed,
             source="real_lean_02_mathlib",
+            validate_candidates=bool(source.get("can_run_lake_env_lean")),
+            lean_timeout_seconds=90,
         )
     project_root = Path(source["project_root"])
     problems = sample_from_sorry_project(
@@ -115,7 +124,11 @@ def _generate_from_source(
 
 def _usable_source(row: dict[str, Any]) -> bool:
     if row.get("kind") == "mathlib":
-        return bool(row.get("mathlib_root")) and _path_exists(row["mathlib_root"])
+        return (
+            bool(row.get("mathlib_root"))
+            and _path_exists(row["mathlib_root"])
+            and bool(row.get("mathlib_prefix_reconstruction_possible", row.get("can_run_lake_env_lean")))
+        )
     return bool(row.get("project_root")) and _path_exists(row["project_root"]) and int(row.get("sorry_count") or 0) > 0
 
 

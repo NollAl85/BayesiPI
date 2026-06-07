@@ -28,7 +28,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--seed", type=int, default=2)
     parser.add_argument("--project-root", type=Path, default=None, help="Lake project root used for local Lean checking.")
-    parser.add_argument("--public-import", default="Mathlib", help="Broad public import used in agent-facing Lean files.")
+    parser.add_argument("--validate-candidates", action="store_true", help="Run reference and anti-leak Lean checks.")
+    parser.add_argument("--lean-timeout-seconds", type=int, default=90)
     parser.add_argument(
         "--module-prefix",
         action="append",
@@ -54,7 +55,8 @@ def main() -> None:
         seed=args.seed,
         module_prefixes=prefixes,
         project_root=args.project_root,
-        public_import=args.public_import,
+        validate_candidates=args.validate_candidates,
+        lean_timeout_seconds=args.lean_timeout_seconds,
     )
     _write_jsonl(args.out_candidates, [model_to_jsonable(problem) for problem in problems])
     _write_jsonl(args.out_solutions, [model_to_jsonable(solution) for solution in solutions])

@@ -25,6 +25,8 @@ def test_source_discovery_detects_fake_lake_project_and_sorry_count(tmp_path: Pa
     assert project_record["sorry_count"] == 1
     assert project_record["lean_toolchain"] == "leanprover/lean4:v4.12.0"
     assert project_record["can_run_lake_env_lean"] is False
+    assert project_record["local_sorry_tasks_available"] is True
+    assert project_record["mathlib_prefix_reconstruction_possible"] is False
     assert any(path.endswith("Hard.lean") for path in project_record["lean_files"])
 
 
@@ -39,6 +41,8 @@ def test_source_discovery_detects_fake_mathlib_directory(tmp_path: Path) -> None
     assert len(mathlib_records) == 1
     assert mathlib_records[0]["mathlib_root"] == str(mathlib)
     assert mathlib_records[0]["theorem_lemma_count"] == 1
+    assert mathlib_records[0]["mathlib_prefix_reconstruction_possible"] is False
+    assert mathlib_records[0]["local_sorry_tasks_available"] is False
 
 
 def test_source_discovery_handles_missing_roots_gracefully(tmp_path: Path) -> None:
@@ -89,7 +93,7 @@ def test_candidate_generation_fails_clearly_without_sources(tmp_path: Path) -> N
     )
 
     assert completed.returncode != 0
-    assert "No local real Lean sources found" in completed.stderr
+    assert "No usable local real Lean sources found" in completed.stderr
 
 
 def test_candidate_generation_uses_fake_sorry_project_without_mathlib(tmp_path: Path) -> None:
@@ -192,7 +196,7 @@ def test_selector_rejects_direct_one_shot_and_fails_loudly(tmp_path: Path) -> No
     assert completed.returncode != 0
     assert "Candidate pool too easy or too small: only 0 survived." in completed.stderr
     rejected = _read_jsonl(tmp_path / "rejected.jsonl")
-    assert rejected[0]["selection_reject_reason"] == "direct_one_shot_one_lean_call_solved"
+    assert rejected[0]["selection_reject_reason"] == "direct_one_shot_solved"
 
 
 def test_selector_keeps_uniform_unsolved_candidate_without_reference_solution(tmp_path: Path) -> None:

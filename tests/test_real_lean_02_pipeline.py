@@ -112,7 +112,7 @@ lemma original_by_neighbor′ (x : Nat) : x = x := by
     )
 
     public_blob = json.dumps(model_to_jsonable(problems[0]), sort_keys=True)
-    assert "term_proof_neighbor" not in public_blob
+    assert "term_proof_neighbor" in public_blob
     assert "original_by_neighbor" not in public_blob
     assert "real02_target_001′" not in public_blob
     assert "real02_target_001" in public_blob
@@ -156,10 +156,52 @@ lemma safe_original_name (x y z : Nat) : x + y + z = x + (y + z) := by
     )
 
     public_blob = json.dumps(model_to_jsonable(problems[0]), sort_keys=True)
-    assert "modifier_sensitive_original" not in public_blob
-    assert "variable (R) in" not in public_blob
+    assert "modifier_sensitive_original" in public_blob
+    assert "variable (R) in" in public_blob
     assert "safe_original_name" not in public_blob
     assert "real02_target_001" in public_blob
+
+
+def test_mathlib_sampler_uses_prefix_imports_not_import_mathlib(tmp_path: Path) -> None:
+    mathlib_dir = tmp_path / "Mathlib"
+    source_dir = mathlib_dir / "Topology"
+    source_dir.mkdir(parents=True)
+    (source_dir / "Prefix.lean").write_text(
+        """import Mathlib.Data.Nat.Basic
+
+namespace Prefix
+
+def helper (x : Nat) : Nat := x
+
+lemma original_prefix_isolated (x : Nat) : helper x = x := by
+  have h1 : helper x = x := rfl
+  have h2 : helper x = x := h1
+  have h3 : helper x = x := h2
+  have h4 : helper x = x := h3
+  have h5 : helper x = x := h4
+  have h6 : helper x = x := h5
+  have h7 : helper x = x := h6
+  have h8 : helper x = x := h7
+  exact h8
+
+end Prefix
+""",
+        encoding="utf-8",
+    )
+
+    problems, _solutions = sample_from_local_mathlib_with_solutions(
+        mathlib_root=tmp_path,
+        limit=1,
+        project_root=tmp_path,
+        module_prefixes=("Topology",),
+    )
+
+    full_source = problems[0].full_lean_source or ""
+    assert "import Mathlib.Data.Nat.Basic" in full_source
+    assert "import Mathlib\n" not in full_source
+    assert "def helper" in full_source
+    assert "theorem real02_target_001" in full_source
+    assert "original_prefix_isolated" not in json.dumps(model_to_jsonable(problems[0]), sort_keys=True)
 
 
 def test_mathlib_sampler_preserves_local_notation_context(tmp_path: Path) -> None:
@@ -351,13 +393,21 @@ def _solution(problem_id: str) -> ReferenceSolution:
   have h5 : x = x := h4
   have h6 : x = x := h5
   have h7 : x = x := h6
-  exact h7"""
+  have h8 : x = x := h7
+  have h9 : x = x := h8
+  exact h9"""
     return ReferenceSolution(
         problem_id=problem_id,
         reference_proof=proof,
         metadata={
             "original_theorem_name": f"private_name_{problem_id}",
             "source_module": "Mathlib/LinearAlgebra/Fake",
+            "validation_attempted": True,
+            "candidate_validated": True,
+            "original_theorem_available": False,
+            "proof_trivially_available": False,
+            "reference_compiles": True,
+            "reference_check_seconds": 1.0,
         },
     )
 

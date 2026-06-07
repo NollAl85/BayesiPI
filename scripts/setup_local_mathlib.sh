@@ -26,7 +26,7 @@ Then run:
   python3 scripts/discover_real_lean_sources.py --out logs/source_discovery.json
   python3 scripts/generate_real_lean_02_candidates.py \
     --source-discovery logs/source_discovery.json \
-    --limit 50 \
+    --limit 300 \
     --out-candidates benchmark/candidates/real_lean_02_candidates.jsonl \
     --out-solutions benchmark/solutions/real_lean_02_solutions.jsonl
 

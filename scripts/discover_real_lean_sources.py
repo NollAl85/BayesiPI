@@ -161,7 +161,7 @@ def _lake_project_record(
         kind = "mathlib"
     elif stats["sorry_count"] > 0:
         kind = "sorry_project"
-    return {
+    record = {
         "source_id": _source_id(kind, project_root),
         "kind": kind,
         "project_root": str(project_root),
@@ -172,6 +172,7 @@ def _lake_project_record(
         "lean_toolchain": _lean_toolchain(project_root),
         "can_run_lake_env_lean": _can_run_lake_env_lean(project_root, check_lake, lake_timeout_seconds),
     }
+    return _with_source_labels(record)
 
 
 def _mathlib_record(
@@ -184,7 +185,7 @@ def _mathlib_record(
 ) -> dict[str, Any]:
     scan_root = project_root if _is_lake_project(project_root) else mathlib_root
     stats = _lean_stats(scan_root, max_files=max_project_files)
-    return {
+    record = {
         "source_id": _source_id("mathlib", project_root),
         "kind": "mathlib",
         "project_root": str(project_root),
@@ -195,6 +196,26 @@ def _mathlib_record(
         "lean_toolchain": _lean_toolchain(project_root),
         "can_run_lake_env_lean": _can_run_lake_env_lean(project_root, check_lake, lake_timeout_seconds),
     }
+    return _with_source_labels(record)
+
+
+def _with_source_labels(record: dict[str, Any]) -> dict[str, Any]:
+    text = " ".join(
+        str(record.get(key) or "")
+        for key in ("source_id", "kind", "project_root", "mathlib_root", "lean_toolchain")
+    ).lower()
+    lean_files = [str(path).lower() for path in record.get("lean_files") or []]
+    combined = " ".join([text, *lean_files])
+    record["mathlib_prefix_reconstruction_possible"] = (
+        record.get("kind") == "mathlib"
+        and bool(record.get("mathlib_root"))
+        and bool(record.get("can_run_lake_env_lean"))
+    )
+    record["local_sorry_tasks_available"] = bool(record.get("project_root")) and int(record.get("sorry_count") or 0) > 0
+    record["putnambench_available"] = "putnambench" in combined or "putnam" in combined
+    record["verisoftbench_available"] = "verisoftbench" in combined or "verisoft" in combined
+    record["htpi_available"] = "htpi" in combined or "sorrydb" in combined
+    return record
 
 
 def _lean_stats(root: Path, *, max_files: int) -> dict[str, Any]:
