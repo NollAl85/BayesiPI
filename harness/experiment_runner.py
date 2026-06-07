@@ -334,7 +334,7 @@ class ExperimentRunner:
                     lean_feedback.append(result.error_summary)
             if proof is not None:
                 break
-            if update_enabled and tracker.can_call_agent():
+            if update_enabled and tracker.can_call_agent() and tracker.rounds < self.config.max_rounds:
                 update = self.pi_agent.update(
                     problem,
                     approaches,

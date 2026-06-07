@@ -237,6 +237,12 @@ def _resolve_mathlib_dir(root: Path) -> Path:
 
 
 def _infer_project_root(mathlib_dir: Path) -> Path:
+    parts = mathlib_dir.parts
+    for index, part in enumerate(parts):
+        if part != ".lake":
+            continue
+        if parts[index + 1 : index + 3] == ("packages", "mathlib"):
+            return Path(*parts[:index])
     if mathlib_dir.parent.name == "mathlib":
         return mathlib_dir.parent
     return mathlib_dir.parent
@@ -403,11 +409,14 @@ def _import_lines(lines: list[str]) -> list[str]:
         stripped = line.strip()
         if not stripped or stripped.startswith("--"):
             continue
-        if stripped.startswith("import "):
-            if stripped not in imports:
-                imports.append(stripped)
+        if stripped == "module" or stripped.startswith("/-"):
             continue
-        if imports and not stripped.startswith("import "):
+        if stripped.startswith("import ") or stripped.startswith("public import "):
+            normalized = "import " + stripped.split("import ", 1)[1].strip()
+            if normalized not in imports:
+                imports.append(normalized)
+            continue
+        if imports and not (stripped.startswith("import ") or stripped.startswith("public import ")):
             break
     return imports
 
@@ -417,11 +426,31 @@ def _imports_all_mathlib(imports: list[str]) -> bool:
 
 
 def _prefix_context(prefix_lines: list[str]) -> list[str]:
-    context = [line.rstrip() for line in prefix_lines if not line.strip().startswith("import ")]
+    context: list[str] = []
+    for line in prefix_lines:
+        normalized = _normalize_prefix_line(line)
+        if normalized is not None:
+            context.append(normalized)
     first = 0
     while first < len(context) and not context[first].strip():
         first += 1
     return context[first:]
+
+
+def _normalize_prefix_line(line: str) -> str | None:
+    stripped = line.strip()
+    if stripped == "module":
+        return None
+    if stripped.startswith("import ") or stripped.startswith("public import "):
+        return None
+    indent = line[: len(line) - len(line.lstrip())]
+    if stripped == "@[expose] public section" or stripped == "public section":
+        return f"{indent}section"
+    if stripped.startswith("@[expose] public "):
+        return indent + stripped.removeprefix("@[expose] public ")
+    if stripped.startswith("public "):
+        return indent + stripped.removeprefix("public ")
+    return line.rstrip()
 
 
 def _public_context(prefix_lines: list[str]) -> list[str]:
@@ -444,6 +473,14 @@ def _public_context(prefix_lines: list[str]) -> list[str]:
         if stripped.startswith("end "):
             ended = stripped.removeprefix("end ").strip()
             _pop_context_scope(root_entries, scope_stack, ended)
+            continue
+        if stripped.startswith("section ") or stripped.startswith("noncomputable section "):
+            _push_context_scope(
+                root_entries,
+                scope_stack,
+                opener=stripped,
+                name=_section_name(stripped),
+            )
             continue
         if stripped in {"section", "noncomputable section"}:
             _push_context_scope(root_entries, scope_stack, opener=stripped, name=None)
@@ -639,8 +676,10 @@ def _context_closing_lines(context: list[str]) -> list[str]:
         if stripped.startswith("namespace "):
             stack.append(("namespace", stripped.removeprefix("namespace ").strip()))
             continue
-        if stripped in {"section", "noncomputable section"} or stripped.startswith("section "):
-            stack.append(("section", None))
+        if stripped in {"section", "noncomputable section"} or stripped.startswith("section ") or stripped.startswith(
+            "noncomputable section "
+        ):
+            stack.append(("section", _section_name(stripped)))
             continue
         if stripped == "end" or stripped.startswith("end "):
             ended_name = stripped.removeprefix("end").strip()
@@ -649,7 +688,7 @@ def _context_closing_lines(context: list[str]) -> list[str]:
             if ended_name:
                 for index in range(len(stack) - 1, -1, -1):
                     kind, name = stack[index]
-                    if kind == "namespace" and name == ended_name:
+                    if name == ended_name and kind in {"namespace", "section"}:
                         del stack[index:]
                         break
                 continue
@@ -658,6 +697,18 @@ def _context_closing_lines(context: list[str]) -> list[str]:
     for kind, name in reversed(stack):
         if kind == "namespace" and name:
             endings.append(f"end {name}")
+        elif kind == "section" and name:
+            endings.append(f"end {name}")
         else:
             endings.append("end")
     return endings
+
+
+def _section_name(stripped: str) -> str | None:
+    if stripped in {"section", "noncomputable section"}:
+        return None
+    if stripped.startswith("noncomputable section "):
+        suffix = stripped.removeprefix("noncomputable section ").strip()
+    else:
+        suffix = stripped.removeprefix("section ").strip()
+    return suffix or None

@@ -204,6 +204,75 @@ end Prefix
     assert "original_prefix_isolated" not in json.dumps(model_to_jsonable(problems[0]), sort_keys=True)
 
 
+def test_mathlib_sampler_normalizes_module_public_import_header(tmp_path: Path) -> None:
+    mathlib_dir = tmp_path / "Mathlib"
+    source_dir = mathlib_dir / "Topology"
+    source_dir.mkdir(parents=True)
+    (source_dir / "ModuleHeader.lean").write_text(
+        """module
+
+public import Mathlib.Data.Nat.Basic
+
+@[expose] public section
+
+lemma original_module_header (x : Nat) : x = x := by
+  have h1 : x = x := rfl
+  have h2 : x = x := h1
+  have h3 : x = x := h2
+  have h4 : x = x := h3
+  have h5 : x = x := h4
+  have h6 : x = x := h5
+  have h7 : x = x := h6
+  have h8 : x = x := h7
+  exact h8
+""",
+        encoding="utf-8",
+    )
+
+    problems, _solutions = sample_from_local_mathlib_with_solutions(
+        mathlib_root=tmp_path,
+        limit=1,
+        project_root=tmp_path,
+        module_prefixes=("Topology",),
+    )
+
+    full_source = problems[0].full_lean_source or ""
+    assert "module\n" not in full_source
+    assert "public import" not in full_source
+    assert "@[expose] public section" not in full_source
+    assert "import Mathlib.Data.Nat.Basic" in full_source
+    assert "\nsection\n" in full_source
+
+
+def test_mathlib_sampler_infers_host_project_for_vendored_mathlib(tmp_path: Path) -> None:
+    host_root = tmp_path / "host"
+    mathlib_dir = host_root / ".lake" / "packages" / "mathlib" / "Mathlib"
+    source_dir = mathlib_dir / "Topology"
+    source_dir.mkdir(parents=True)
+    (source_dir / "Vendored.lean").write_text(
+        """lemma original_vendored_root (x : Nat) : x = x := by
+  have h1 : x = x := rfl
+  have h2 : x = x := h1
+  have h3 : x = x := h2
+  have h4 : x = x := h3
+  have h5 : x = x := h4
+  have h6 : x = x := h5
+  have h7 : x = x := h6
+  have h8 : x = x := h7
+  exact h8
+""",
+        encoding="utf-8",
+    )
+
+    problems, _solutions = sample_from_local_mathlib_with_solutions(
+        mathlib_root=host_root,
+        limit=1,
+        module_prefixes=("Topology",),
+    )
+
+    assert problems[0].project_root == str(host_root)
+
+
 def test_mathlib_sampler_preserves_local_notation_context(tmp_path: Path) -> None:
     mathlib_dir = tmp_path / "Mathlib"
     source_dir = mathlib_dir / "FieldTheory"
@@ -278,6 +347,46 @@ end ScopedNotation
     assert "original_scoped_notation_context" not in json.dumps(
         model_to_jsonable(problems[0]), sort_keys=True
     )
+
+
+def test_mathlib_sampler_closes_named_sections_by_name(tmp_path: Path) -> None:
+    mathlib_dir = tmp_path / "Mathlib"
+    source_dir = mathlib_dir / "GroupTheory"
+    source_dir.mkdir(parents=True)
+    (source_dir / "NamedSection.lean").write_text(
+        """namespace NamedSection
+section FormPerm
+
+variable {alpha : Type*} [DecidableEq alpha] {x : alpha}
+
+def helper (y : alpha) : alpha := y
+
+lemma original_named_section_context : helper x = x := by
+  have h1 : helper x = x := rfl
+  have h2 : helper x = x := h1
+  have h3 : helper x = x := h2
+  have h4 : helper x = x := h3
+  have h5 : helper x = x := h4
+  have h6 : helper x = x := h5
+  have h7 : helper x = x := h6
+  exact h7
+end FormPerm
+end NamedSection
+""",
+        encoding="utf-8",
+    )
+
+    problems, _solutions = sample_from_local_mathlib_with_solutions(
+        mathlib_root=tmp_path,
+        limit=1,
+        project_root=tmp_path,
+        module_prefixes=("GroupTheory",),
+    )
+
+    full_source = problems[0].full_lean_source or ""
+    assert "section FormPerm" in full_source
+    assert full_source.splitlines()[-2:] == ["end FormPerm", "end NamedSection"]
+    assert "original_named_section_context" not in json.dumps(model_to_jsonable(problems[0]), sort_keys=True)
 
 
 def test_real_lean_02_selector_rejects_easy_candidates(tmp_path: Path) -> None:

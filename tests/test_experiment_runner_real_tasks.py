@@ -68,8 +68,40 @@ def test_uniform_round_robin_allocates_only_round_budget(tmp_path: Path) -> None
     assert {approach.approach_id for approach in round_1 + round_2} == {"a", "b", "c", "d"}
 
 
+def test_pi_does_not_update_after_final_round(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project_root = _project_root_with_prompts(tmp_path)
+    monkeypatch.setattr(LeanRunner, "check", _fake_unsuccessful_check)
+    config = ExperimentConfig(
+        run_id_prefix="pytest_pi",
+        conditions=[Condition.pi],
+        max_rounds=1,
+        workers_per_round=1,
+        max_llm_calls=3,
+        max_lean_calls=1,
+        approaches=[Approach(approach_id="a", description="first approach")],
+    )
+    runner = ExperimentRunner(config, project_root, run_id="pi_no_final_update", backend_name="deterministic")
+
+    rows = runner.run_all([_toy_problem()])
+
+    assert len(rows) == 1
+    assert not rows[0].solved
+    trace_rows = _read_csv(runner.logger.run_dir / "approach_trace.csv")
+    assert any(row["agent_role"] == "pi_initial" for row in trace_rows)
+    assert not any(row["agent_role"] == "pi_update" for row in trace_rows)
+
+
 def _fake_successful_check(self: LeanRunner, problem: Problem, candidate_lean_code: str) -> LeanResult:
     return LeanResult(success=True, elapsed_seconds=0.01, command=self.command)
+
+
+def _fake_unsuccessful_check(self: LeanRunner, problem: Problem, candidate_lean_code: str) -> LeanResult:
+    return LeanResult(
+        success=False,
+        elapsed_seconds=0.01,
+        command=self.command,
+        error_summary="synthetic failure",
+    )
 
 
 def _toy_problem() -> Problem:
