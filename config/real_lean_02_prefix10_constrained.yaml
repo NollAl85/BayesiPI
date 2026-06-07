@@ -1,0 +1,40 @@
+run_id_prefix: real02_prefix10_constrained
+lean_command:
+  - lake
+  - env
+  - lean
+max_rounds: 3
+workers_per_round: 2
+max_llm_calls: 8
+max_lean_calls: 8
+max_wall_seconds: 1200
+lean_timeout_seconds: 90
+max_estimated_tokens: null
+uniform_policy: round_robin
+uniform_seed: 3
+conditions:
+  - direct
+  - uniform
+  - pi_initial_only
+  - pi
+approaches:
+  - approach_id: unfold_definitions
+    description: Unfold only the central definitions and coercions needed to expose the proof shape.
+  - approach_id: simp_rewrite
+    description: Use simp, rw, nth_rewrite, calc, congrArg, and local hypotheses to normalize the target.
+  - approach_id: library_search
+    description: Use local Mathlib knowledge and imported-library lemmas without web or repository search.
+  - approach_id: constructor_extensionality
+    description: Use constructors, extensionality, subtype equality, structure fields, and iff splitting.
+  - approach_id: algebraic_normalization
+    description: Normalize algebraic expressions with ring, group, module, map, and coercion reasoning.
+  - approach_id: order_or_lattice_reasoning
+    description: Use order, lattice, monotonicity, interval, supremum/infimum, and inequality reasoning.
+  - approach_id: topology_analysis_reasoning
+    description: Use continuity, limits, neighborhoods, closed/compact/set reasoning, and analysis-specific structure.
+  - approach_id: linear_algebra_structure
+    description: Use submodule, linear map, basis, span, dimension, independence, and range/kernel structure.
+  - approach_id: auxiliary_lemma
+    description: Propose a small local helper lemma that isolates the main mathematical obstacle.
+  - approach_id: contradiction_or_boundary
+    description: Inspect impossible hypotheses, boundary cases, nontriviality, emptiness, and contradiction routes.

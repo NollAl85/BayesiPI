@@ -266,6 +266,46 @@ python3 scripts/analyze_real_lean_02.py \
 
 The analysis reports all-task aggregates, direct-full-failed aggregates, uniform-constrained-failed aggregates, solving approaches, PI belief traces, and whether PI changed beliefs after failed workers.
 
+### Prefix-10 Constrained Allocation Pilot
+
+The current signal-bearing `real_lean_02` regime is the prefix-isolated Mathlib prefix-10 set:
+
+- `benchmark/problems/real_lean_02_prefix10_all.jsonl`
+- `benchmark/problems/real_lean_02_prefix10_middle_6.jsonl`
+- `benchmark/problems/real_lean_02_prefix10_direct_solved_2.jsonl`
+- `benchmark/problems/real_lean_02_prefix10_unsolved_by_wide_2.jsonl`
+
+The latest wide-search run on these tasks used `config/real_lean_02_one_attempt_per_approach.yaml` with `workers_per_round=10`, `max_rounds=1`, `max_llm_calls=11`, and `max_lean_calls=10`. Its aggregate result was:
+
+- `direct`: 2/10
+- `uniform`: 7/10
+- `pi_initial_only`: 6/10
+- `pi`: 6/10
+
+This is a useful difficulty regime because direct is weak while broad multi-agent search helps. It is not yet a PI allocation-pressure test: uniform gets to try all 10 configured approaches once, so the result mostly measures broad search coverage.
+
+The next experiment constrains allocation with `config/real_lean_02_prefix10_constrained.yaml`: `workers_per_round=2`, `max_rounds=3`, `max_llm_calls=8`, and `max_lean_calls=8`. The primary slice is `benchmark/problems/real_lean_02_prefix10_middle_6.jsonl`, which contains tasks that direct missed but broad search could often solve. Under this scarce budget, PI should be compared with uniform on both success rate and efficiency: solved tasks, Lean calls, LLM calls, and estimated tokens.
+
+Run the constrained middle-6 pilot:
+
+```bash
+bash scripts/run_real_lean_02_prefix10_constrained.sh
+```
+
+Analyze an existing constrained run:
+
+```bash
+python3 scripts/analyze_real_lean_02_constrained.py \
+  --summary logs/real02_prefix10_middle6_constrained_low_01/summary.csv \
+  --approach-trace logs/real02_prefix10_middle6_constrained_low_01/approach_trace.csv \
+  --middle benchmark/problems/real_lean_02_prefix10_middle_6.jsonl \
+  --direct-solved benchmark/problems/real_lean_02_prefix10_direct_solved_2.jsonl \
+  --unsolved-wide benchmark/problems/real_lean_02_prefix10_unsolved_by_wide_2.jsonl \
+  --out-dir logs/real02_prefix10_middle6_constrained_low_01/constrained_analysis
+```
+
+The expected interpretation is narrow: PI is promising if it beats uniform on middle-6 success, roughly matches uniform with fewer Lean/LLM calls, or shows belief updates that move work toward eventually successful approaches. A close result is neutral and should be repeated with another run id or seed; one run should not be overinterpreted.
+
 ## HTPI/SorryDB Pilot
 
 The first real-task pilot uses HTPI/SorryDB-style proof obligations from `benchmark/problems/sorrydb_htpi_10_pilot.jsonl`.
