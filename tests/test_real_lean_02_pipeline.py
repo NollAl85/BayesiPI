@@ -52,6 +52,192 @@ end LinearAlgebra
     assert solutions[0].metadata["source_module"] == "Mathlib/LinearAlgebra/Hard"
 
 
+def test_mathlib_sampler_uses_proof_assignment_not_type_ascription(tmp_path: Path) -> None:
+    mathlib_dir = tmp_path / "Mathlib"
+    source_dir = mathlib_dir / "Topology"
+    source_dir.mkdir(parents=True)
+    (source_dir / "TypeAscription.lean").write_text(
+        """theorem original_type_ascription :
+    (Set.univ (α := Nat)).Nonempty := by
+  have h0 : (0 : Nat) ∈ Set.univ := by trivial
+  have h1 : (Set.univ (α := Nat)).Nonempty := ⟨0, h0⟩
+  have h2 : (Set.univ (α := Nat)).Nonempty := h1
+  have h3 : (Set.univ (α := Nat)).Nonempty := h2
+  have h4 : (Set.univ (α := Nat)).Nonempty := h3
+  have h5 : (Set.univ (α := Nat)).Nonempty := h4
+  have h6 : (Set.univ (α := Nat)).Nonempty := h5
+  exact h6
+""",
+        encoding="utf-8",
+    )
+
+    problems, _solutions = sample_from_local_mathlib_with_solutions(
+        mathlib_root=tmp_path,
+        limit=1,
+        project_root=tmp_path,
+        module_prefixes=("Topology",),
+    )
+
+    full_source = problems[0].full_lean_source or ""
+    assert "(α := Nat)" in full_source
+    assert "(α := {{proof}}" not in full_source
+    assert "Nonempty := {{proof}}" in full_source
+
+
+def test_mathlib_sampler_does_not_bundle_neighboring_term_proofs(tmp_path: Path) -> None:
+    mathlib_dir = tmp_path / "Mathlib"
+    source_dir = mathlib_dir / "Order"
+    source_dir.mkdir(parents=True)
+    (source_dir / "Neighbors.lean").write_text(
+        """theorem term_proof_neighbor (x : Nat) : x = x := rfl
+
+lemma original_by_neighbor′ (x : Nat) : x = x := by
+  have h1 : x = x := rfl
+  have h2 : x = x := h1
+  have h3 : x = x := h2
+  have h4 : x = x := h3
+  have h5 : x = x := h4
+  have h6 : x = x := h5
+  have h7 : x = x := h6
+  exact h7
+""",
+        encoding="utf-8",
+    )
+
+    problems, _solutions = sample_from_local_mathlib_with_solutions(
+        mathlib_root=tmp_path,
+        limit=1,
+        project_root=tmp_path,
+        module_prefixes=("Order",),
+    )
+
+    public_blob = json.dumps(model_to_jsonable(problems[0]), sort_keys=True)
+    assert "term_proof_neighbor" not in public_blob
+    assert "original_by_neighbor" not in public_blob
+    assert "real02_target_001′" not in public_blob
+    assert "real02_target_001" in public_blob
+
+
+def test_mathlib_sampler_skips_command_modifier_context(tmp_path: Path) -> None:
+    mathlib_dir = tmp_path / "Mathlib"
+    source_dir = mathlib_dir / "RingTheory"
+    source_dir.mkdir(parents=True)
+    (source_dir / "Modifier.lean").write_text(
+        """variable {R : Type*}
+variable (R) in
+lemma modifier_sensitive_original : True := by
+  have h1 : True := trivial
+  have h2 : True := h1
+  have h3 : True := h2
+  have h4 : True := h3
+  have h5 : True := h4
+  have h6 : True := h5
+  have h7 : True := h6
+  exact h7
+
+lemma safe_original_name (x y z : Nat) : x + y + z = x + (y + z) := by
+  have h1 : x + y + z = x + (y + z) := by omega
+  have h2 : x + y + z = x + (y + z) := h1
+  have h3 : x + y + z = x + (y + z) := h2
+  have h4 : x + y + z = x + (y + z) := h3
+  have h5 : x + y + z = x + (y + z) := h4
+  have h6 : x + y + z = x + (y + z) := h5
+  have h7 : x + y + z = x + (y + z) := h6
+  exact h7
+""",
+        encoding="utf-8",
+    )
+
+    problems, _solutions = sample_from_local_mathlib_with_solutions(
+        mathlib_root=tmp_path,
+        limit=1,
+        project_root=tmp_path,
+        module_prefixes=("RingTheory",),
+    )
+
+    public_blob = json.dumps(model_to_jsonable(problems[0]), sort_keys=True)
+    assert "modifier_sensitive_original" not in public_blob
+    assert "variable (R) in" not in public_blob
+    assert "safe_original_name" not in public_blob
+    assert "real02_target_001" in public_blob
+
+
+def test_mathlib_sampler_preserves_local_notation_context(tmp_path: Path) -> None:
+    mathlib_dir = tmp_path / "Mathlib"
+    source_dir = mathlib_dir / "FieldTheory"
+    source_dir.mkdir(parents=True)
+    (source_dir / "Notation.lean").write_text(
+        """local notation "FooNat" => Nat
+
+lemma original_notation_context (x : FooNat) : x = x := by
+  have h1 : x = x := rfl
+  have h2 : x = x := h1
+  have h3 : x = x := h2
+  have h4 : x = x := h3
+  have h5 : x = x := h4
+  have h6 : x = x := h5
+  have h7 : x = x := h6
+  exact h7
+""",
+        encoding="utf-8",
+    )
+
+    problems, _solutions = sample_from_local_mathlib_with_solutions(
+        mathlib_root=tmp_path,
+        limit=1,
+        project_root=tmp_path,
+        module_prefixes=("FieldTheory",),
+    )
+
+    full_source = problems[0].full_lean_source or ""
+    assert 'local notation "FooNat" => Nat' in full_source
+    assert "FooNat" in problems[0].statement
+    assert "original_notation_context" not in json.dumps(model_to_jsonable(problems[0]), sort_keys=True)
+
+
+def test_mathlib_sampler_preserves_ordered_scoped_notation_context(tmp_path: Path) -> None:
+    mathlib_dir = tmp_path / "Mathlib"
+    source_dir = mathlib_dir / "RingTheory"
+    source_dir.mkdir(parents=True)
+    (source_dir / "ScopedNotation.lean").write_text(
+        """namespace ScopedNotation
+variable {p : Nat}
+local notation "FooP" => p
+noncomputable section
+
+lemma original_scoped_notation_context : FooP = p := by
+  have h1 : FooP = p := rfl
+  have h2 : FooP = p := h1
+  have h3 : FooP = p := h2
+  have h4 : FooP = p := h3
+  have h5 : FooP = p := h4
+  have h6 : FooP = p := h5
+  have h7 : FooP = p := h6
+  exact h7
+end
+end ScopedNotation
+""",
+        encoding="utf-8",
+    )
+
+    problems, _solutions = sample_from_local_mathlib_with_solutions(
+        mathlib_root=tmp_path,
+        limit=1,
+        project_root=tmp_path,
+        module_prefixes=("RingTheory",),
+    )
+
+    full_source = problems[0].full_lean_source or ""
+    assert full_source.index("namespace ScopedNotation") < full_source.index("variable {p : Nat}")
+    assert full_source.index("variable {p : Nat}") < full_source.index('local notation "FooP" => p')
+    assert full_source.index('local notation "FooP" => p') < full_source.index("noncomputable section")
+    assert full_source.index("noncomputable section") < full_source.index("theorem real02_target_001")
+    assert full_source.splitlines()[-2:] == ["end", "end ScopedNotation"]
+    assert "original_scoped_notation_context" not in json.dumps(
+        model_to_jsonable(problems[0]), sort_keys=True
+    )
+
+
 def test_real_lean_02_selector_rejects_easy_candidates(tmp_path: Path) -> None:
     candidates = tmp_path / "candidates.jsonl"
     solutions = tmp_path / "solutions.jsonl"
@@ -65,12 +251,14 @@ def test_real_lean_02_selector_rejects_easy_candidates(tmp_path: Path) -> None:
 
     hard = _problem("real_lean_02_001")
     easy = _problem("real_lean_02_002")
-    _write_jsonl(candidates, [model_to_jsonable(hard), model_to_jsonable(easy)])
+    uniform_easy = _problem("real_lean_02_003")
+    _write_jsonl(candidates, [model_to_jsonable(hard), model_to_jsonable(easy), model_to_jsonable(uniform_easy)])
     _write_jsonl(
         solutions,
         [
             model_to_jsonable(_solution("real_lean_02_001")),
             model_to_jsonable(_solution("real_lean_02_002")),
+            model_to_jsonable(_solution("real_lean_02_003")),
         ],
     )
     _write_summary(
@@ -78,6 +266,7 @@ def test_real_lean_02_selector_rejects_easy_candidates(tmp_path: Path) -> None:
         [
             {"problem_id": "real_lean_02_001", "condition": "direct", "solved": "False", "rounds": "3"},
             {"problem_id": "real_lean_02_002", "condition": "direct", "solved": "True", "rounds": "1"},
+            {"problem_id": "real_lean_02_003", "condition": "direct", "solved": "False", "rounds": "3"},
         ],
     )
     _write_summary(
@@ -85,6 +274,7 @@ def test_real_lean_02_selector_rejects_easy_candidates(tmp_path: Path) -> None:
         [
             {"problem_id": "real_lean_02_001", "condition": "uniform", "solved": "False", "rounds": "2"},
             {"problem_id": "real_lean_02_002", "condition": "uniform", "solved": "True", "rounds": "1"},
+            {"problem_id": "real_lean_02_003", "condition": "uniform", "solved": "True", "rounds": "1"},
         ],
     )
 
@@ -126,20 +316,27 @@ def test_real_lean_02_selector_rejects_easy_candidates(tmp_path: Path) -> None:
     rejected = [json.loads(line) for line in out_rejected.read_text(encoding="utf-8").splitlines()]
     uniform_failed = [json.loads(line) for line in out_uniform_failed.read_text(encoding="utf-8").splitlines()]
     assert [row["problem_id"] for row in selected] == ["real_lean_02_001"]
-    assert rejected[0]["selection_reject_reason"] == "direct_full_solved"
+    reasons = {row["problem_id"]: row["selection_reject_reason"] for row in rejected}
+    assert reasons["real_lean_02_002"] == "direct_full_solved"
+    assert reasons["real_lean_02_003"] == "uniform_constrained_one_round_solved"
     assert [row["problem_id"] for row in uniform_failed] == ["real_lean_02_001"]
 
 
 def _problem(problem_id: str) -> Problem:
     suffix = problem_id.rsplit("_", 1)[-1]
     theorem_name = f"real02_target_{suffix}"
+    statement = (
+        f"theorem {theorem_name} (xs ys zs : List Nat) : "
+        "(xs ++ ys).map Nat.succ ++ zs.map Nat.succ = "
+        "xs.map Nat.succ ++ ys.map Nat.succ ++ zs.map Nat.succ := {{proof}}"
+    )
     return Problem(
         problem_id=problem_id,
         source="real_lean_02_mathlib",
         theorem_name=theorem_name,
-        statement=f"theorem {theorem_name} (x : Nat) : x = x := {{{{proof}}}}",
+        statement=statement,
         task_type="file_with_hole",
-        full_lean_source=f"import Mathlib\n\ntheorem {theorem_name} (x : Nat) : x = x := {{{{proof}}}}\n",
+        full_lean_source=f"import Mathlib\n\n{statement}\n",
         expected_theorem_name=theorem_name,
         metadata={"anonymized": True},
     )

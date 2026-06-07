@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import random
 import re
 from pathlib import Path
+from typing import Callable
 
 from benchmark.benchmark import load_jsonl, write_jsonl
 from harness.schemas import Problem, ReferenceSolution
@@ -33,8 +34,9 @@ LOW_LEVEL_PREFIXES = (
 DECL_RE = re.compile(
     r"^(?P<prefix>(?:@\[[^\]]+\]\s*)*(?:private\s+|protected\s+)?)"
     r"(?P<kind>theorem|lemma)\s+"
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_'.]*)\b"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_'.′]*)(?=\s|:|\(|\[|\{|$)"
 )
+PROOF_ASSIGN_RE = re.compile(r":=\s*by\b")
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,16 @@ class ExtractedTheorem:
     full_lean_source: str
     reference_proof: str
     statement: str
+
+
+@dataclass
+class _ContextScope:
+    opener: str
+    name: str | None
+    entries: list["_ContextEntry"]
+
+
+_ContextEntry = str | _ContextScope
 
 
 def load_mathlib_reconstruction_jsonl(path: Path | str) -> list[Problem]:
@@ -221,8 +233,10 @@ def _extract_theorems_from_file(
         match = DECL_RE.match(line.strip())
         if not match:
             continue
+        if _has_unsupported_command_modifier(lines[:index]):
+            continue
         block = _declaration_block(lines, index)
-        if ":= by" not in block and ":=\nby" not in block:
+        if not _has_by_proof_assignment(block):
             continue
         reference_proof = _reference_proof(block)
         if meaningful_proof_lines(reference_proof) < 8:
@@ -260,14 +274,11 @@ def _extract_theorems_from_file(
 
 def _declaration_block(lines: list[str], start_index: int) -> str:
     block: list[str] = []
-    seen_assignment = False
-    for line in lines[start_index:]:
+    for offset, line in enumerate(lines[start_index:]):
         stripped = line.strip()
-        if seen_assignment and block and _top_level_boundary(stripped, line):
+        if offset > 0 and block and _top_level_boundary(stripped, line):
             break
         block.append(line)
-        if ":=" in line:
-            seen_assignment = True
     return "\n".join(block).rstrip()
 
 
@@ -292,8 +303,8 @@ def _top_level_boundary(stripped: str, raw_line: str) -> bool:
 
 
 def _reference_proof(block: str) -> str:
-    _, proof = block.split(":=", 1)
-    return proof.strip()
+    match = _proof_assignment_match(block)
+    return block[match.start() + 2 :].strip()
 
 
 def _anonymize_declaration(block: str, public_name: str) -> str:
@@ -309,7 +320,8 @@ def _anonymize_declaration(block: str, public_name: str) -> str:
 
 
 def _with_hole(block: str) -> str:
-    before, _ = block.split(":=", 1)
+    match = _proof_assignment_match(block)
+    before = block[: match.start()]
     return f"{before.rstrip()} := {{{{proof}}}}"
 
 
@@ -317,55 +329,165 @@ def _statement_from_declaration(block_with_hole: str) -> str:
     return block_with_hole.strip()
 
 
+def _has_by_proof_assignment(block: str) -> bool:
+    return PROOF_ASSIGN_RE.search(block) is not None
+
+
+def _proof_assignment_match(block: str) -> re.Match[str]:
+    match = PROOF_ASSIGN_RE.search(block)
+    if not match:
+        raise ValueError("Declaration block has no `:= by` proof assignment.")
+    return match
+
+
 def _public_context(prefix_lines: list[str]) -> list[str]:
-    namespace_stack: list[str] = []
-    opens: list[str] = []
-    variables: list[str] = []
-    noncomputable = False
+    root_entries: list[_ContextEntry] = []
+    scope_stack: list[_ContextScope] = []
     for raw_line in prefix_lines:
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("--"):
             continue
+        if stripped.endswith(" in"):
+            continue
         if stripped.startswith("namespace "):
-            namespace_stack.append(stripped.removeprefix("namespace ").strip())
+            _push_context_scope(
+                root_entries,
+                scope_stack,
+                opener=stripped,
+                name=stripped.removeprefix("namespace ").strip(),
+            )
             continue
         if stripped.startswith("end "):
             ended = stripped.removeprefix("end ").strip()
-            if namespace_stack and (not ended or namespace_stack[-1] == ended):
-                namespace_stack.pop()
+            _pop_context_scope(root_entries, scope_stack, ended)
             continue
-        if stripped.startswith("noncomputable section"):
-            noncomputable = True
+        if stripped in {"section", "noncomputable section"}:
+            _push_context_scope(root_entries, scope_stack, opener=stripped, name=None)
             continue
         if stripped.startswith("open ") or stripped.startswith("open scoped "):
-            _append_unique(opens, stripped)
+            _append_context_entry(root_entries, scope_stack, stripped)
+            continue
+        if stripped.startswith("local notation ") or stripped.startswith("notation "):
+            _append_context_entry(root_entries, scope_stack, stripped)
             continue
         if stripped.startswith("variable ") or stripped.startswith("variables "):
-            _append_unique(variables, stripped)
+            _append_context_entry(root_entries, scope_stack, stripped)
             continue
-    context: list[str] = []
-    if noncomputable:
-        context.append("noncomputable section")
-    context.extend(opens[-20:])
-    context.extend(f"namespace {name}" for name in namespace_stack)
-    context.extend(variables[-40:])
-    return context
+    return _trim_context(_flatten_context_entries(root_entries))
+
+
+def _has_unsupported_command_modifier(prefix_lines: list[str]) -> bool:
+    for raw_line in reversed(prefix_lines):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("--") or stripped.startswith("@["):
+            continue
+        return stripped.endswith(" in")
+    return False
 
 
 def _render_full_source(*, context: list[str], declaration_with_hole: str, public_import: str) -> str:
-    namespace_names = [
-        line.removeprefix("namespace ").strip()
-        for line in context
-        if line.startswith("namespace ")
-    ]
-    has_section = "noncomputable section" in context
-    ending = [f"end {name}" for name in reversed(namespace_names)]
-    if has_section:
-        ending.append("end")
+    ending = _context_closing_lines(context)
     parts = [f"import {public_import}", *context, "", declaration_with_hole, *ending]
     return "\n".join(parts).strip() + "\n"
 
 
-def _append_unique(values: list[str], value: str) -> None:
-    if value not in values:
-        values.append(value)
+def _append_context_entry(
+    root_entries: list[_ContextEntry],
+    scope_stack: list[_ContextScope],
+    value: str,
+) -> None:
+    entries = scope_stack[-1].entries if scope_stack else root_entries
+    entries.append(value)
+
+
+def _push_context_scope(
+    root_entries: list[_ContextEntry],
+    scope_stack: list[_ContextScope],
+    *,
+    opener: str,
+    name: str | None,
+) -> None:
+    scope = _ContextScope(opener=opener, name=name, entries=[])
+    _append_context_scope(root_entries, scope_stack, scope)
+    scope_stack.append(scope)
+
+
+def _append_context_scope(
+    root_entries: list[_ContextEntry],
+    scope_stack: list[_ContextScope],
+    scope: _ContextScope,
+) -> None:
+    entries = scope_stack[-1].entries if scope_stack else root_entries
+    entries.append(scope)
+
+
+def _pop_context_scope(
+    root_entries: list[_ContextEntry],
+    scope_stack: list[_ContextScope],
+    ended_name: str,
+) -> None:
+    if not scope_stack:
+        return
+    target_index = len(scope_stack) - 1
+    if ended_name:
+        for index in range(len(scope_stack) - 1, -1, -1):
+            if scope_stack[index].name == ended_name:
+                target_index = index
+                break
+        else:
+            return
+    while len(scope_stack) > target_index:
+        scope = scope_stack.pop()
+        parent_entries = scope_stack[-1].entries if scope_stack else root_entries
+        if scope in parent_entries:
+            parent_entries.remove(scope)
+
+
+def _flatten_context_entries(entries: list[_ContextEntry]) -> list[str]:
+    flattened: list[str] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            flattened.append(entry)
+        else:
+            flattened.append(entry.opener)
+            flattened.extend(_flatten_context_entries(entry.entries))
+    return flattened
+
+
+def _trim_context(context: list[str]) -> list[str]:
+    keep = set(range(len(context)))
+    _drop_earliest_matching(context, keep, lambda line: line.startswith("open "), 20)
+    _drop_earliest_matching(
+        context,
+        keep,
+        lambda line: line.startswith("local notation ") or line.startswith("notation "),
+        20,
+    )
+    _drop_earliest_matching(
+        context,
+        keep,
+        lambda line: line.startswith("variable ") or line.startswith("variables "),
+        60,
+    )
+    return [line for index, line in enumerate(context) if index in keep]
+
+
+def _drop_earliest_matching(
+    context: list[str],
+    keep: set[int],
+    predicate: Callable[[str], bool],
+    max_count: int,
+) -> None:
+    indices = [index for index, line in enumerate(context) if predicate(line)]
+    for index in indices[: max(0, len(indices) - max_count)]:
+        keep.discard(index)
+
+
+def _context_closing_lines(context: list[str]) -> list[str]:
+    endings: list[str] = []
+    for line in context:
+        if line.startswith("namespace "):
+            endings.append(f"end {line.removeprefix('namespace ').strip()}")
+        elif line in {"section", "noncomputable section"}:
+            endings.append("end")
+    return list(reversed(endings))

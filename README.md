@@ -152,7 +152,37 @@ The target empirical regime is:
 
 The primary signal-bearing subset is the `uniform_constrained` failed set, not direct one-shot failures.
 
-Sample candidates from a local Mathlib checkout:
+Mathlib is preferred, but optional. The source-pluggable path first looks for local Mathlib/Lake projects, then local Lake projects with real Lean files containing `sorry`. It never clones repositories or falls back to synthetic tasks.
+
+Point discovery at known local sources when possible:
+
+```bash
+export MATHLIB_ROOT=/path/to/mathlib-or-lake-project
+export HTPI_ROOT=/path/to/local/htpi-or-sorrydb-project
+export REAL_LEAN_SOURCE_ROOTS=/path/to/project-a:/path/to/project-b
+```
+
+All of these variables are optional. Discovery also checks `.`, `..`, `/private/tmp`, `/tmp`, `~/Code`, `~/code`, and `~/Documents`:
+
+```bash
+python3 scripts/discover_real_lean_sources.py \
+  --roots . .. /private/tmp /tmp \
+  --out logs/source_discovery.json
+```
+
+Generate candidates from the selected local source:
+
+```bash
+python3 scripts/generate_real_lean_02_candidates.py \
+  --source-discovery logs/source_discovery.json \
+  --limit 50 \
+  --out-candidates benchmark/candidates/real_lean_02_candidates.jsonl \
+  --out-solutions benchmark/solutions/real_lean_02_solutions.jsonl
+```
+
+If a usable Mathlib source is found, generation uses the Mathlib reconstruction sampler. Otherwise, it extracts file-with-hole tasks from local `sorry` declarations. Public problems use anonymized theorem names like `real02_target_001` and no source module path. Original theorem names, source paths, and reference proofs are never exposed to agents; local `sorry` tasks write no reference solution unless one genuinely exists.
+
+The older Mathlib-only sampler is still available when you explicitly want it:
 
 ```bash
 python3 scripts/sample_mathlib_real_lean_02.py /path/to/mathlib-or-lake-project \
@@ -161,7 +191,11 @@ python3 scripts/sample_mathlib_real_lean_02.py /path/to/mathlib-or-lake-project 
   --out-solutions benchmark/solutions/real_lean_02_solutions.jsonl
 ```
 
-The sampler targets upper-undergraduate and early-graduate Mathlib areas such as linear algebra, topology, analysis, group/ring/field theory, order, and measurable spaces. Public problems use anonymized theorem names like `real02_target_001`, a broad public import, and no source module path. Original theorem names, source modules, and reference proofs are written only to the private solutions JSONL.
+For local setup guidance without running any install:
+
+```bash
+bash scripts/setup_local_mathlib.sh
+```
 
 Run the three difficulty probes:
 
@@ -184,15 +218,17 @@ Select the final benchmark only after `direct_full` and `uniform_constrained` pr
 python3 scripts/select_real_lean_02.py \
   --candidates benchmark/candidates/real_lean_02_candidates.jsonl \
   --solutions benchmark/solutions/real_lean_02_solutions.jsonl \
+  --direct-one-shot-summary logs/real_lean_02_direct_one_shot/summary.csv \
   --direct-full-summary logs/real_lean_02_direct_full/summary.csv \
   --uniform-constrained-summary logs/real_lean_02_uniform_constrained/summary.csv \
   --out-problems benchmark/problems/real_lean_02.jsonl
 ```
 
-The selector hard-rejects candidates solved by `direct_full`, candidates solved by `uniform_constrained` in one round, short or trivial reference proofs, public payloads that leak private source information, and slow reference checks when timing metadata is available. If fewer than 20 candidates survive, it fails with:
+The selector hard-rejects candidates solved by `direct_full`, candidates solved by `uniform_constrained` in one round, direct one-shot solves with one Lean call when that probe is supplied, short or trivial reference proofs when a reference exists, candidates with local setup failures, public payloads that leak private source information, and theorem statements that are too short or syntactic. If fewer than 20 candidates survive, it fails with:
 
 ```text
-Candidate pool too easy: only X survived. Sample harder modules.
+Candidate pool too easy or too small: only X survived.
+Add harder local Lean sources or provide Mathlib/HTPI/SorryDB roots.
 ```
 
 Run final allocation with:

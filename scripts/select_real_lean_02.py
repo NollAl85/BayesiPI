@@ -23,6 +23,17 @@ from harness.schemas import Problem, ReferenceSolution, model_to_jsonable
 TRIVIAL_PROOF_RE = re.compile(r"^\s*by\s+(?:exact|simpa|simp|rfl|omega)\b|^\s*(?:exact|simpa|simp|rfl|omega)\b")
 PUBLIC_NAME_RE = re.compile(r"^real02_target_\d{3,}$")
 PRIVATE_METADATA_KEYS = {"original_theorem_name", "source_module", "source_path"}
+REFERENCE_LEAK_KEYS = {"hidden_reference_proof", "reference_proof"}
+SETUP_FAILURE_MARKERS = (
+    "unknown package",
+    "unknown module",
+    "invalid import",
+    "failed to load",
+    "no such file",
+    "object file",
+    "permission denied",
+    "lean setup",
+)
 
 
 def main() -> None:
@@ -39,6 +50,7 @@ def main() -> None:
     )
     parser.add_argument("--direct-full-summary", type=Path, required=True)
     parser.add_argument("--uniform-constrained-summary", type=Path, required=True)
+    parser.add_argument("--direct-one-shot-summary", type=Path, default=None)
     parser.add_argument(
         "--out-problems",
         type=Path,
@@ -71,11 +83,14 @@ def main() -> None:
     args = parser.parse_args()
 
     candidates = load_jsonl(args.candidates)
-    solutions = load_solutions_jsonl(args.solutions)
+    solutions = load_solutions_jsonl(args.solutions) if args.solutions.exists() else {}
     direct_full = _read_summary(args.direct_full_summary, "direct")
     uniform = _read_summary(args.uniform_constrained_summary, "uniform")
+    direct_one_shot = _read_summary(args.direct_one_shot_summary, "direct") if args.direct_one_shot_summary else {}
     _require_complete(candidates, direct_full, "direct_full")
     _require_complete(candidates, uniform, "uniform_constrained")
+    if args.direct_one_shot_summary:
+        _require_complete(candidates, direct_one_shot, "direct_one_shot")
 
     survivors: list[tuple[tuple[int, str], Problem]] = []
     rejected: list[tuple[Problem, str]] = []
@@ -86,6 +101,7 @@ def main() -> None:
             solution=solution,
             direct_full=direct_full[problem.problem_id],
             uniform=uniform[problem.problem_id],
+            direct_one_shot=direct_one_shot.get(problem.problem_id),
             min_reference_proof_lines=args.min_reference_proof_lines,
             max_reference_check_seconds=args.max_reference_check_seconds,
         )
@@ -96,7 +112,10 @@ def main() -> None:
 
     if len(survivors) < args.min_survivors:
         _write_rejected(args.out_rejected, rejected)
-        raise SystemExit(f"Candidate pool too easy: only {len(survivors)} survived. Sample harder modules.")
+        raise SystemExit(
+            f"Candidate pool too easy or too small: only {len(survivors)} survived.\n"
+            "Add harder local Lean sources or provide Mathlib/HTPI/SorryDB roots."
+        )
 
     survivors.sort(key=lambda item: item[0], reverse=True)
     selected = [problem for _, problem in survivors[: args.target_size]]
@@ -122,6 +141,7 @@ def _hard_reject_reason(
     solution: ReferenceSolution | None,
     direct_full: dict[str, str],
     uniform: dict[str, str],
+    direct_one_shot: dict[str, str] | None,
     min_reference_proof_lines: int,
     max_reference_check_seconds: float,
 ) -> str | None:
@@ -129,34 +149,83 @@ def _hard_reject_reason(
         return "direct_full_solved"
     if _solved(uniform) and _int_field(uniform, "rounds", 0) <= 1:
         return "uniform_constrained_one_round_solved"
-    if solution is None:
-        return "missing_reference_solution"
-    proof = solution.reference_proof
-    if meaningful_proof_lines(proof) < min_reference_proof_lines:
-        return "short_reference_proof"
-    if TRIVIAL_PROOF_RE.search(proof.strip()):
-        return "trivial_reference_proof"
+    if direct_one_shot and _solved(direct_one_shot) and _int_field(direct_one_shot, "lean_calls", 0) <= 1:
+        return "direct_one_shot_one_lean_call_solved"
+    if _probe_setup_failed(direct_full) or _probe_setup_failed(uniform) or (
+        direct_one_shot is not None and _probe_setup_failed(direct_one_shot)
+    ):
+        return "lean_setup_failed"
+    if _candidate_known_unchecked(problem):
+        return "candidate_not_locally_checked"
     if _public_payload_leaks_private_source(problem):
         return "public_payload_leaks_private_source"
-    if _statement_obviously_names_theorem(problem, solution):
-        return "statement_identifies_theorem"
-    check_seconds = float(solution.metadata.get("reference_check_seconds") or 0.0)
-    if check_seconds > max_reference_check_seconds:
-        return "slow_reference_check"
+    if _theorem_too_short_or_syntactic(problem):
+        return "theorem_too_short_or_syntactic"
+    if solution is not None:
+        proof = solution.reference_proof
+        if meaningful_proof_lines(proof) < min_reference_proof_lines:
+            return "short_reference_proof"
+        if TRIVIAL_PROOF_RE.search(proof.strip()):
+            return "trivial_reference_proof"
+        if _statement_obviously_names_theorem(problem, solution):
+            return "statement_identifies_theorem"
+        check_seconds = float(solution.metadata.get("reference_check_seconds") or 0.0)
+        if check_seconds > max_reference_check_seconds:
+            return "slow_reference_check"
     return None
 
 
 def _public_payload_leaks_private_source(problem: Problem) -> bool:
+    if problem.hidden_reference_proof:
+        return True
     if not problem.theorem_name or not PUBLIC_NAME_RE.match(problem.theorem_name):
         return True
     if problem.expected_theorem_name and problem.expected_theorem_name != problem.theorem_name:
         return True
     if problem.module_path:
         return True
-    if problem.imports and problem.imports != ["Mathlib"]:
+    public_payload = problem.public_payload()
+    lowered = json.dumps(public_payload, sort_keys=True).lower()
+    if any(key in lowered for key in PRIVATE_METADATA_KEYS | REFERENCE_LEAK_KEYS):
         return True
-    lowered = json.dumps(problem.metadata, sort_keys=True).lower()
-    return any(key in lowered for key in PRIVATE_METADATA_KEYS)
+    return _metadata_contains_private_path(problem.metadata)
+
+
+def _metadata_contains_private_path(metadata: dict) -> bool:
+    lowered = json.dumps(metadata, sort_keys=True).lower()
+    path_markers = ("/users/", "/private/", "/tmp/", "\\users\\")
+    return any(marker in lowered for marker in path_markers)
+
+
+def _candidate_known_unchecked(problem: Problem) -> bool:
+    if problem.metadata.get("lean_setup_failed"):
+        return True
+    if problem.metadata.get("validation_attempted") and not problem.metadata.get("candidate_validated"):
+        return True
+    return False
+
+
+def _probe_setup_failed(row: dict[str, str]) -> bool:
+    text = f"{row.get('notes', '')}\n{row.get('proof', '')}".lower()
+    return any(marker in text for marker in SETUP_FAILURE_MARKERS)
+
+
+def _theorem_too_short_or_syntactic(problem: Problem) -> bool:
+    statement = re.sub(r"\s+", " ", problem.statement or "").strip()
+    if len(statement) < 70:
+        return True
+    lowered = statement.lower()
+    trivial_markers = (
+        ": true",
+        " true :",
+        "x = x",
+        "a = a",
+        "n = n",
+        "p -> p",
+        "p ↔ p",
+        "false ->",
+    )
+    return any(marker in lowered for marker in trivial_markers)
 
 
 def _statement_obviously_names_theorem(problem: Problem, solution: ReferenceSolution) -> bool:
